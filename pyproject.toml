@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "worldsim"
+version = "0.0.0"
+description = "History Machine — eine emergente Welt-Simulation (headless Kern)"
+requires-python = ">=3.11"
+# Der Kern bleibt Standard-Python: KEINE Runtime-Abhaengigkeiten.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+worldsim = "worldsim.main:main"
+
+[tool.setuptools.packages.find]
+include = ["worldsim*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["worldsim", "tests"]
+
+[tool.ruff.lint]
+# Sinnvolle, nicht wuchernde Auswahl.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "RUF", # ruff-spezifisch
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
