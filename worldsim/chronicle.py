@@ -117,6 +117,10 @@ def wichtigkeit(event: Event) -> tuple[float, tuple[Factor, ...]]:
             factors = (Factor(FactorLabel.THRONFOLGE, 3.5 if turning else 2.5),)
         case EventKind.ABSPALTUNG:
             factors = (Factor(FactorLabel.FRAGMENTIERUNG, 4.5),)
+        case EventKind.KONVERSION:
+            factors = (Factor(FactorLabel.BEKEHRUNG, 3.0),)
+        case EventKind.SCHISMA:
+            factors = (Factor(FactorLabel.GLAUBENSSPALTUNG, 4.5),)
         case _:
             factors = ()
     score = sum(f.weight for f in factors)
@@ -136,11 +140,11 @@ def chronik(world: World, log: EventLog, cfg: Config) -> list[str]:
         score, _ = wichtigkeit(event)
         if score < cfg.chronicle_min_importance:
             continue
-        lines.append(_narrate(world, event))
+        lines.append(_narrate(world, event, log))
     return lines
 
 
-def _narrate(world: World, event: Event) -> str:
+def _narrate(world: World, event: Event, log: EventLog) -> str:
     """Eine erzaehlte Zeile aus ``kind`` + ``subjects`` + ``effects`` + ``factors``."""
     nation = _nation_name(world, event.subjects[0])
     match event.kind:
@@ -159,8 +163,9 @@ def _narrate(world: World, event: Event) -> str:
         case EventKind.KRIEG:
             target = _nation_name(world, event.subjects[1])
             drivers = _format_top_factors(event)
+            verb = "declared a war of faith on" if _is_faith_war(event) else "declared war on"
             return (
-                f"Year {event.year}: {nation} declared war on {target}, "
+                f"Year {event.year}: {nation} {verb} {target}, "
                 f"driven by {drivers}."
             )
         case EventKind.SCHLACHT:
@@ -176,6 +181,13 @@ def _narrate(world: World, event: Event) -> str:
             return f"Year {event.year}: {nation} and {partner} allied against {enemy}."
         case EventKind.BUENDNIS_BRUCH:
             partner = _nation_name(world, event.subjects[1])
+            schisma = _schisma_cause(log, event)
+            if schisma is not None:
+                faith = _identity_name(world, schisma.subjects[2])
+                return (
+                    f"Year {event.year}: the schism of the {faith} faith shattered "
+                    f"the alliance between {nation} and {partner}."
+                )
             return f"Year {event.year}: the alliance between {nation} and {partner} collapsed."
         case EventKind.GRENZREIBUNG:
             other = _nation_name(world, event.subjects[1])
@@ -193,6 +205,16 @@ def _narrate(world: World, event: Event) -> str:
         case EventKind.ABSPALTUNG:
             breakaway = _nation_name(world, event.subjects[1])
             return f"Year {event.year}: {breakaway} broke away from {nation}."
+        case EventKind.KONVERSION:
+            faith = _identity_name(world, event.subjects[1])
+            return f"Year {event.year}: {nation} converted to the {faith} faith."
+        case EventKind.SCHISMA:
+            new_faith = _identity_name(world, event.subjects[1])
+            old_faith = _identity_name(world, event.subjects[2])
+            return (
+                f"Year {event.year}: the {new_faith} faith schismed from the "
+                f"{old_faith} faith within {nation}."
+            )
         case _:  # pragma: no cover - alle aktiven Arten sind oben abgedeckt
             return f"Year {event.year}: {nation} ({event.kind})."
 
@@ -203,7 +225,7 @@ def erklaere(world: World, log: EventLog, event: Event) -> list[str]:
     Zeigt die Narration, alle ``factors`` nach Betrag sortiert (``label: gewicht``)
     und die zitierten ``causes`` als erzaehlte, eine Ebene tiefe Warum-Kette.
     """
-    lines = [_narrate(world, event)]
+    lines = [_narrate(world, event, log)]
     if event.factors:
         lines.append("  factors (sorted by magnitude):")
         for factor in sorted(event.factors, key=lambda f: abs(f.weight), reverse=True):
@@ -212,7 +234,7 @@ def erklaere(world: World, log: EventLog, event: Event) -> list[str]:
     if event.causes:
         lines.append("  because of:")
         for cause_id in event.causes:
-            lines.append(f"    [{cause_id}] {_narrate(world, log.get(cause_id))}")
+            lines.append(f"    [{cause_id}] {_narrate(world, log.get(cause_id), log)}")
     return lines
 
 
@@ -239,6 +261,34 @@ def _ruler_age(world: World, rid: EntityId) -> int:
     """Endalter eines Herrschers (beim Tod eingefroren im Register)."""
     r = world.rulers.get(rid)
     return r.age if r else 0
+
+
+def _identity_name(world: World, iid: EntityId) -> str:
+    """Loese einen Identitaets-/Glaubensnamen auf (bleibt dauerhaft im Register)."""
+    ident = world.identities.get(iid)
+    return ident.name if ident else f"faith#{iid}"
+
+
+def _is_faith_war(event: Event, limit: int = 3) -> bool:
+    """Ein Krieg ist ein Glaubenskrieg, wenn Glaubensreibung ein Hauptantrieb war.
+
+    Massstab sind die **treibenden** (positiven) Faktoren: liegt der
+    Glaubensgraben unter ihren groessten, war der fremde Glaube ein Hauptmotiv
+    (nicht bloss ein Randbeitrag neben Aggression und Grenzreibung).
+    """
+    drivers = sorted(
+        (f for f in event.factors if f.weight > 0.0), key=lambda f: f.weight, reverse=True
+    )[:limit]
+    return any(f.label == FactorLabel.GLAUBENSGRABEN for f in drivers)
+
+
+def _schisma_cause(log: EventLog, event: Event) -> Event | None:
+    """Das Schisma unter den Ursachen eines Events (fuer die Buendnisbruch-Narration)."""
+    for cause_id in event.causes:
+        cause = log.get(cause_id)
+        if cause.kind == EventKind.SCHISMA:
+            return cause
+    return None
 
 
 def _accession_mode(effects: tuple[Effect, ...]) -> str:

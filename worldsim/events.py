@@ -59,6 +59,9 @@ class EventKind(StrEnum):
     TOD_FIGUR = "TOD_FIGUR"
     SUKZESSION = "SUKZESSION"
     ABSPALTUNG = "ABSPALTUNG"
+    # Phase 4 aktiv (Identitaet/Glaube):
+    KONVERSION = "KONVERSION"
+    SCHISMA = "SCHISMA"
     # Fuer spaetere Phasen reserviert:
     INNOVATION = "INNOVATION"
     WERK = "WERK"
@@ -101,6 +104,13 @@ class FactorLabel(StrEnum):
     THRONSTREIT = "Thronstreit"
     UEBERDEHNUNG = "Ueberdehnung"
     PERSOENLICHE_RIVALITAET = "Persoenliche Rivalitaet"
+    # Phase 4: Identitaet, Affinitaet, Konversion, Schisma.
+    GLAUBENSAFFINITAET = "Glaubensaffinitaet"
+    GLAUBENSGRABEN = "Glaubensgraben"
+    DOMINANZ = "Dominanz"
+    GLAUBENSTREUE = "Glaubenstreue"
+    GLAUBENSGROESSE = "Glaubensgroesse"
+    GLAUBENSEIFER = "Glaubenseifer"
     # Wichtigkeits-Faktoren (warum ein Event erzaehlenswert ist, §6 Rekursion):
     NEUE_NATION = "Neue Nation"
     GEBIETSGEWINN = "Gebietsgewinn"
@@ -112,6 +122,8 @@ class FactorLabel(StrEnum):
     HERRSCHERTOD = "Herrschertod"
     THRONFOLGE = "Thronfolge"
     FRAGMENTIERUNG = "Fragmentierung"
+    BEKEHRUNG = "Bekehrung"
+    GLAUBENSSPALTUNG = "Glaubensspaltung"
 
 
 @dataclass(frozen=True)

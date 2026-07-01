@@ -18,6 +18,7 @@ __all__ = [
     "AccessionMode",
     "EntityId",
     "Figure",
+    "Identity",
     "NationTraits",
     "Polity",
     "Region",
@@ -96,6 +97,26 @@ class Ruler:
     alive: bool = True
     # Phase-5-Flag: grosser Trait-Sprung beim Machtwechsel ⇒ potenzieller Wendepunkt.
     turning_point: bool = False
+
+
+@dataclass
+class Identity:
+    """Eine diskrete Identitaets-/Glaubensgemeinschaft (Phase 4).
+
+    Bewusst **EIN** Mechanismus (nicht Religion/Kultur/Ideologie getrennt): eine
+    Nation traegt genau eine ``identity_id``. Gleiche Identitaet stiftet Affinitaet
+    (Buendnis leichter), verschiedene stiftet Reibung (Krieg leichter). Ein
+    Schisma spaltet eine Identitaet in eine neue ``id`` — vorher gleiche Nationen
+    haben danach Reibung. ``parent`` verweist auf die Ursprungs-Identitaet.
+
+    Wie Herrscher bleiben Identitaeten dauerhaft im Register, damit die Chronik
+    sie namentlich aufloesen kann; der Name ist reines Flavour (das Verhalten
+    haengt an der ``id``, nicht am Namen).
+    """
+
+    id: EntityId
+    name: str = ""
+    parent: EntityId | None = None
 
 
 @dataclass
@@ -178,6 +199,11 @@ class Polity:
     # selben Tick wie der Tod).
     leader: EntityId | None = None
 
+    # --- Phase 4: Identitaet -----------------------------------------------
+    # Diskrete Identitaets-/Glaubenszugehoerigkeit: Verweis (id) in
+    # ``World.identities``. Gleiche id ⇒ Affinitaet, verschiedene id ⇒ Reibung.
+    identity_id: EntityId | None = None
+
     # --- fuer spaetere Phasen reserviert -----------------------------------
     members: tuple[EntityId, ...] = ()
     legitimacy: float = 0.0
@@ -212,5 +238,8 @@ class World:
     # Herrscher-Register (Phase 3). Tote Herrscher bleiben erhalten, damit die
     # Chronik sie namentlich aufloesen kann; ``alive`` unterscheidet sie.
     rulers: dict[EntityId, Ruler] = field(default_factory=dict)
+    # Identitaets-Register (Phase 4). Durch Schisma entstandene Identitaeten
+    # kommen hinzu; alle bleiben fuer die Chronik namentlich aufloesbar.
+    identities: dict[EntityId, Identity] = field(default_factory=dict)
     # Deterministischer ID-Zaehler.
     next_id: EntityId = 0

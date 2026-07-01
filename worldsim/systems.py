@@ -39,6 +39,7 @@ from worldsim.events import (
 from worldsim.models import (
     AccessionMode,
     EntityId,
+    Identity,
     NationTraits,
     Polity,
     Ruler,
@@ -56,6 +57,7 @@ __all__ = [
     "forge_ruler",
     "founding",
     "friction",
+    "identity",
     "population",
     "production",
     "ruler",
@@ -336,6 +338,12 @@ def _war_desire(
     advantage = _clamp(advantage / cfg.power_reference, -cfg.advantage_cap, cfg.advantage_cap)
     decision.add(FactorLabel.MILITAERVORTEIL, advantage)
     decision.add(FactorLabel.AGGRESSION, et_x.aggression)
+
+    # Affinitaet (Phase 4): fremder Glaube rechtfertigt den Krieg leichter. Wird
+    # dieser Faktor zum Hauptantrieb, gilt der Krieg als Glaubenskrieg (chronicle).
+    py_ident = world.polities[y].identity_id
+    if py_ident is not None and py_ident != px.identity_id:
+        decision.add(FactorLabel.GLAUBENSGRABEN, cfg.identity_war_friction)
 
     # Persoenliche Rivalitaet: zwei aggressive Herrscher heizen den Krieg an.
     et_y = _effective_traits(world, world.polities[y])
@@ -804,6 +812,8 @@ def _spawn_breakaway(
         # Kulturelle Kontinuitaet: gleiche Basis-Traits, abweichender Herrscher.
         traits=parent.traits,
         leader=new_ruler.id,
+        # Glaubens-Kontinuitaet: die Abspaltung teilt zunaechst die Identitaet.
+        identity_id=parent.identity_id,
     )
     # Gegenseitiges Misstrauen und frischer Groll zwischen Tochter und Mutterland.
     parent.relations[new_pid] = -cfg.secession_distrust
@@ -834,6 +844,163 @@ def _spawn_breakaway(
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
+
+
+# === Identitaet & Glaube (Phase 4) ==========================================
+
+def identity(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """EIN Identitaets-Mechanismus: Ausbreitung (Konversion) und Schisma.
+
+    Dominante Nationen verbreiten ihren Glauben — eine viel schwaechere Nation
+    uebernimmt die Identitaet eines uebermaechtigen andersglaeubigen Nachbarn
+    (erobertes/unterlegenes Gebiet konvertiert). Gelegentlich spaltet ein
+    zelotischer Herrscher (oder schiere Groesse) eine Identitaet in eine neue
+    ``id`` — vorher gleiche Nationen haben danach Reibung, und ein Buendnis unter
+    Glaubensbrueder kann daran zerbrechen. Laeuft am Tick-Ende: die Affinitaets-
+    Faktoren in Diplomatie/Krieg lesen die Identitaeten des Vorjahres.
+    """
+    powers = {pid: _power(world.polities[pid]) for pid in sorted(world.polities)}
+    for pid in sorted(world.polities):
+        _maybe_convert(world, pid, powers, cfg, log)
+    for pid in sorted(world.polities):
+        _maybe_schisma(world, pid, rng, cfg, log)
+    return world
+
+
+def _maybe_convert(
+    world: World,
+    pid: EntityId,
+    powers: dict[EntityId, float],
+    cfg: Config,
+    log: EventLog,
+) -> None:
+    """Konvertiere eine viel schwaechere Nation zum Glauben eines dominanten Nachbarn."""
+    pol = world.polities[pid]
+    own_faith = pol.identity_id
+    # Ein frisch konvertierter (oder schismierter) Glaube haelt eine Weile:
+    # verhindert das jaehrliche Kippen eines Pufferstaats.
+    if (
+        _recent_subject_event(
+            log, world.year, EventKind.KONVERSION, pid, cfg.conversion_cooldown_years
+        )
+        is not None
+        or _recent_subject_event(
+            log, world.year, EventKind.SCHISMA, pid, cfg.conversion_cooldown_years
+        )
+        is not None
+    ):
+        return
+    candidates = [
+        n
+        for n in _bordering_nations(world, pol)
+        if world.polities[n].identity_id is not None
+        and world.polities[n].identity_id != own_faith
+    ]
+    if not candidates:
+        return
+    dominant = max(candidates, key=lambda n: (powers[n], -n))
+    own = max(powers[pid], 1.0)
+    if powers[dominant] < own * cfg.conversion_power_ratio:
+        return
+
+    decision = Decision()
+    dominance = min(powers[dominant] / own - 1.0, cfg.conversion_dominance_cap)
+    # Eine kuerzliche Niederlage gegen den Dominanten macht die Bekehrung plausibel.
+    battle = _recent_pair_events(
+        log, world.year, EventKind.SCHLACHT, pid, dominant, cfg.cause_window_years
+    )
+    decision.add(
+        FactorLabel.DOMINANZ, dominance * cfg.conversion_dominance_weight, causes=battle
+    )
+    honor = _effective_traits(world, pol).honor
+    decision.add(FactorLabel.GLAUBENSTREUE, -honor * cfg.conversion_honor_resist)
+    if not decision.passes(cfg.conversion_threshold):
+        return
+
+    new_faith = world.polities[dominant].identity_id
+    if new_faith is None:  # per Kandidatenfilter unmoeglich, aber typ-sicher
+        return
+    pol.identity_id = new_faith
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.KONVERSION,
+            subjects=(pid, new_faith, dominant),
+            factors=decision.as_factors(),
+            causes=decision.as_causes(),
+            effects=(Effect(pid, "identity_id", own_faith, new_faith),),
+        )
+    )
+
+
+def _maybe_schisma(
+    world: World, pid: EntityId, rng: Stream, cfg: Config, log: EventLog
+) -> None:
+    """Ein frisch aufgestiegener zelotischer Herrscher spaltet eine Identitaet ab.
+
+    Nur teilbar, wenn die Identitaet von mehreren Nationen geteilt wird — sonst
+    entstuende bloss eine Umbenennung ohne neue Reibung. Der Ausloeser ist an
+    einen kuerzlichen Machtantritt gebunden: ein Impuls je Thronwechsel, kein
+    Dauerdruck ⇒ Schismata bleiben selten. Kausalkette: Schisma ← Sukzession
+    (← Herrschertod). Bricht Buendnisse zu den ehemaligen Glaubensbruedern.
+    """
+    pol = world.polities[pid]
+    old_faith = pol.identity_id
+    if old_faith is None:
+        return
+    # Gate: nur ein gerade aufgestiegener Herrscher stoesst ein Schisma an.
+    accession = _recent_subject_event(
+        log, world.year, EventKind.SUKZESSION, pid, cfg.schism_window_years
+    )
+    if accession is None:
+        return
+    followers = [
+        q for q in sorted(world.polities) if world.polities[q].identity_id == old_faith
+    ]
+    if len(followers) < cfg.schism_min_followers:
+        return
+
+    decision = Decision()
+    decision.add(FactorLabel.GLAUBENSGROESSE, (len(followers) - 1) * cfg.schism_size_weight)
+    zeal = _effective_traits(world, pol).honor - cfg.schism_zeal_ref
+    if zeal > 0.0:
+        decision.add(FactorLabel.GLAUBENSEIFER, zeal * cfg.schism_zeal_weight)
+    if not decision.passes(cfg.schism_threshold):
+        return
+
+    new_id = world.next_id
+    world.next_id += 1
+    world.identities[new_id] = Identity(id=new_id, name=make_name(rng), parent=old_faith)
+    pol.identity_id = new_id
+
+    # Ehemalige Glaubensbrueder unter den Verbuendeten: das Band zerbricht.
+    broken = [a for a in pol.allies if world.polities[a].identity_id == old_faith]
+    effects = [Effect(pid, "identity_id", old_faith, new_id)]
+    for ally in broken:
+        effects.append(Effect(pid, "ally_lost", ally, None))
+    schisma_id = log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.SCHISMA,
+            subjects=(pid, new_id, old_faith),
+            factors=decision.as_factors(),
+            causes=(accession,),
+            effects=tuple(effects),
+        )
+    )
+    for ally in broken:
+        pol.allies = tuple(a for a in pol.allies if a != ally)
+        other = world.polities[ally]
+        other.allies = tuple(a for a in other.allies if a != pid)
+        log.append(
+            EventDraft(
+                year=world.year,
+                kind=EventKind.BUENDNIS_BRUCH,
+                subjects=(min(pid, ally), max(pid, ally)),
+                factors=(Factor(FactorLabel.GLAUBENSSPALTUNG, 1.0),),
+                causes=(schisma_id,),
+            )
+        )
 
 
 # === Diplomatie-Helfer ======================================================
@@ -909,6 +1076,9 @@ def _form_alliances(
                 )
                 / 2.0,
             )
+            # Affinitaet (Phase 4): gleicher Glaube stiftet ein festeres Band.
+            if pa.identity_id is not None and pa.identity_id == pb.identity_id:
+                decision.add(FactorLabel.GLAUBENSAFFINITAET, cfg.identity_alliance_bonus)
             if not decision.passes(cfg.alliance_threshold):
                 continue
 

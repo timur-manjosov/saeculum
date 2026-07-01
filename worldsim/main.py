@@ -21,7 +21,7 @@ __all__ = ["main"]
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="worldsim",
-        description="History Machine — headless Welt-Simulation (Phase 3).",
+        description="History Machine — headless Welt-Simulation (Phase 4).",
     )
     parser.add_argument("--seed", type=int, default=0, help="Master-Seed (Save = Seed).")
     parser.add_argument("--years", type=int, default=200, help="Zu simulierende Jahre.")
@@ -36,6 +36,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--explain-split",
         action="store_true",
         help="Zeige die Faktoren-Aufschluesselung der ersten Fragmentierung (Abspaltung).",
+    )
+    parser.add_argument(
+        "--explain-schism",
+        action="store_true",
+        help="Zeige das erste Schisma, das ein Buendnis zerbrach, samt Folge-Events.",
     )
     return parser.parse_args(argv)
 
@@ -52,11 +57,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     successions = sum(1 for e in log if e.kind == EventKind.SUKZESSION)
     fragmentations = sum(1 for e in log if e.kind == EventKind.ABSPALTUNG)
+    conversions = sum(1 for e in log if e.kind == EventKind.KONVERSION)
+    schismata = sum(1 for e in log if e.kind == EventKind.SCHISMA)
     print(
         f"--- {args.years} years, seed={args.seed}: "
         f"{len(world.polities)} nations, {len(world.rulers)} rulers, "
-        f"{successions} successions, {fragmentations} fragmentations, "
-        f"{len(log)} events, {len(lines)} in chronicle"
+        f"{len(world.identities)} faiths, {successions} successions, "
+        f"{fragmentations} fragmentations, {conversions} conversions, "
+        f"{schismata} schisms, {len(log)} events, {len(lines)} in chronicle"
     )
 
     if args.explain > 0:
@@ -74,6 +82,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             print()
             for line in erklaere(world, log, splits[0]):
                 print(line)
+
+    if args.explain_schism:
+        # Das erste Schisma, das mindestens ein Buendnis zerbrach, samt Bruch-Events.
+        broken_by = {
+            e.causes[0]: e
+            for e in log
+            if e.kind == EventKind.BUENDNIS_BRUCH and e.causes
+        }
+        schisms = [
+            e
+            for e in log
+            if e.kind == EventKind.SCHISMA and e.id in broken_by
+        ]
+        print(f"\n=== schism that broke an alliance ({len(schisms)} such) ===")
+        if schisms:
+            schism = schisms[0]
+            print()
+            for line in erklaere(world, log, schism):
+                print(line)
+            for event in log:
+                if event.kind == EventKind.BUENDNIS_BRUCH and schism.id in event.causes:
+                    print()
+                    for line in erklaere(world, log, event):
+                        print(line)
 
     return 0
 

@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 4
+    config_version: int = 5
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -153,6 +153,36 @@ class Config:
     personal_rivalry_weight: float = 0.30
     # Wahrscheinlichkeit, dass ein persoenlicher Krieg den Herrscher des Verlierers toetet.
     personal_death_chance: float = 0.40
+
+    # --- identity: EINE Identitaets-/Affinitaetsdimension (Phase 4) --------
+    # Anzahl der Anfangs-Identitaeten (< num_nations ⇒ Nationen teilen Glauben).
+    num_identities: int = 3
+    # Affinitaet als benannter Faktor in bestehenden Entscheidungen: gleicher
+    # Glaube erleichtert das Buendnis, fremder erleichtert den Krieg.
+    identity_alliance_bonus: float = 0.5
+    identity_war_friction: float = 0.4
+    # Konversion: eine viel schwaechere Nation uebernimmt den Glauben eines
+    # dominanten andersglaeubigen Nachbarn (dominante Nationen verbreiten Identitaet).
+    conversion_power_ratio: float = 1.8  # Nachbar muss so viel maechtiger sein
+    conversion_threshold: float = 1.0
+    conversion_dominance_weight: float = 1.0
+    conversion_dominance_cap: float = 2.5
+    conversion_honor_resist: float = 1.0  # Ehre (Glaubenstreue) widersteht Konversion
+    # Nach einer Konversion bleibt der neue Glaube so viele Jahre stabil (kein
+    # jaehrliches Hin-und-Her eines Pufferstaats zwischen zwei Grossmaechten).
+    conversion_cooldown_years: int = 12
+    # Schisma: ein frisch aufgestiegener zelotischer Herrscher (oder schiere
+    # Groesse der Identitaet) spaltet gelegentlich eine neue Identitaet ab. Der
+    # Ausloeser ist an einen kuerzlichen Machtantritt gebunden ⇒ selten (an
+    # Generationswechsel gekoppelt) und einmalig je Herrscher.
+    schism_threshold: float = 1.2
+    schism_min_followers: int = 2  # nur teilbare Identitaeten mit >=2 Nationen
+    schism_size_weight: float = 0.5  # je weiterer Nation ueber eine hinaus
+    schism_zeal_ref: float = 0.6  # effektive Ehre darueber zaehlt als Glaubenseifer
+    schism_zeal_weight: float = 2.0
+    # Nur so viele Jahre nach dem Machtantritt kann der neue Herrscher ein Schisma
+    # ausloesen (kleines Fenster ⇒ ein Impuls je Thronwechsel, kein Dauerdruck).
+    schism_window_years: int = 1
 
     # --- chronicle: Wichtigkeits-Schwelle fuer die Text-Chronik ------------
     # Foundings/Expansionen/Meilensteine liegen darueber; kleine Hungersnoete

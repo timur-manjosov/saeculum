@@ -61,6 +61,18 @@ def _assert_world_invariants(world: World, cfg: Config) -> None:
         if not ruler.alive:
             assert rid not in living_leaders
 
+    # Phase 4: jede Nation traegt genau eine gueltige, registrierte Identitaet.
+    assert world.identities
+    for pol in world.polities.values():
+        assert pol.identity_id is not None
+        assert pol.identity_id in world.identities
+    # Durch Schisma entstandene Identitaeten nennen eine ebenfalls registrierte
+    # Ursprungs-Identitaet (keine haengenden Verweise).
+    for iid, ident in world.identities.items():
+        assert ident.id == iid
+        if ident.parent is not None:
+            assert ident.parent in world.identities
+
 
 @pytest.mark.parametrize("seed", [1, 42, 1234])
 def test_invariants_hold_every_tick(seed: int) -> None:

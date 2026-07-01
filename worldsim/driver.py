@@ -17,6 +17,7 @@ from worldsim.events import EventLog
 from worldsim.models import (
     AccessionMode,
     EntityId,
+    Identity,
     NationTraits,
     Polity,
     Region,
@@ -34,6 +35,7 @@ from worldsim.systems import (
     forge_ruler,
     founding,
     friction,
+    identity,
     population,
     production,
     ruler,
@@ -55,6 +57,9 @@ SYSTEMS: list[tuple[str, System]] = [
     ("friction", friction),
     ("diplomacy", diplomacy),
     ("war", war),
+    # Am Tick-Ende: Glaubensausbreitung (Konversion) und Schisma. Die Affinitaets-
+    # Faktoren in Diplomatie/Krieg lesen die Identitaeten des Vorjahres.
+    ("identity", identity),
 ]
 
 # --- kosmetische Namensgebung (Flavour, getrennter RNG-Strom) --------------
@@ -117,10 +122,22 @@ def worldgen(master: Rng, cfg: Config) -> World:
 
     # Nationen: ids num_regions .. num_regions+num_nations-1.
     # Anfangsherrscher: ids danach, num_regions+num_nations .. +2*num_nations-1.
+    # Anfangs-Identitaeten: ids danach, num_regions+2*num_nations .. +num_identities-1.
     polities: dict[EntityId, Polity] = {}
     rulers: dict[EntityId, Ruler] = {}
     capitals = _choose_capitals(regions, gen, cfg)
     ruler_base = cfg.num_regions + cfg.num_nations
+    identity_base = ruler_base + cfg.num_nations
+
+    # Wenige Anfangs-Identitaeten (< Nationen), damit Nationen sie teilen und
+    # daraus Glaubensbloecke — und spaeter Schismata — entstehen koennen.
+    identities: dict[EntityId, Identity] = {}
+    identity_ids: list[EntityId] = []
+    for i in range(cfg.num_identities):
+        iid: EntityId = identity_base + i
+        identities[iid] = Identity(id=iid, name=make_name(cos))
+        identity_ids.append(iid)
+
     for n in range(cfg.num_nations):
         pid: EntityId = cfg.num_regions + n
         rid: EntityId = ruler_base + n
@@ -141,6 +158,7 @@ def worldgen(master: Rng, cfg: Config) -> World:
             ),
             traits=_nation_traits(gen),
             leader=rid,
+            identity_id=identity_ids[n % cfg.num_identities],
         )
 
     return World(
@@ -148,7 +166,8 @@ def worldgen(master: Rng, cfg: Config) -> World:
         regions=regions,
         polities=polities,
         rulers=rulers,
-        next_id=ruler_base + cfg.num_nations,
+        identities=identities,
+        next_id=identity_base + cfg.num_identities,
     )
 
 
