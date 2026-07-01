@@ -62,8 +62,13 @@ class EventKind(StrEnum):
     # Phase 4 aktiv (Identitaet/Glaube):
     KONVERSION = "KONVERSION"
     SCHISMA = "SCHISMA"
-    # Fuer spaetere Phasen reserviert:
+    # Phase 5 aktiv (Schocks, Technologie, Wendepunkte):
+    PEST = "PEST"
+    ERDBEBEN = "ERDBEBEN"
+    DUERRE = "DUERRE"
     INNOVATION = "INNOVATION"
+    WENDEPUNKT = "WENDEPUNKT"
+    # Fuer spaetere Phasen reserviert:
     WERK = "WERK"
     MIGRATION = "MIGRATION"
     GEBURT_FIGUR = "GEBURT_FIGUR"
@@ -111,6 +116,15 @@ class FactorLabel(StrEnum):
     GLAUBENSTREUE = "Glaubenstreue"
     GLAUBENSGROESSE = "Glaubensgroesse"
     GLAUBENSEIFER = "Glaubenseifer"
+    # Phase 5: Schocks, Technologie, Wendepunkte.
+    PEST = "Pest"
+    ERDBEBEN = "Erdbeben"
+    DUERRE = "Duerre"
+    FORSCHUNG = "Forschung"
+    MACHTWECHSEL = "Machtwechsel"
+    GLAUBENSWANDEL = "Glaubenswandel"
+    BUENDNISZERFALL = "Buendniszerfall"
+    GEBIETSKOLLAPS = "Gebietskollaps"
     # Wichtigkeits-Faktoren (warum ein Event erzaehlenswert ist, §6 Rekursion):
     NEUE_NATION = "Neue Nation"
     GEBIETSGEWINN = "Gebietsgewinn"
@@ -124,6 +138,10 @@ class FactorLabel(StrEnum):
     FRAGMENTIERUNG = "Fragmentierung"
     BEKEHRUNG = "Bekehrung"
     GLAUBENSSPALTUNG = "Glaubensspaltung"
+    KATASTROPHE = "Katastrophe"
+    TECHNOLOGISCHER_DURCHBRUCH = "Technologischer Durchbruch"
+    WENDEPUNKT = "Wendepunkt"
+    ZENTRALITAET = "Kausale Zentralitaet"
 
 
 @dataclass(frozen=True)

@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
-from worldsim.chronicle import chronik, erklaere
+from worldsim.chronicle import chronik_mit_zeitaltern, erklaere
 from worldsim.config import DEFAULT_CONFIG
 from worldsim.driver import simulate
 from worldsim.events import EventKind
@@ -51,7 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     cfg = DEFAULT_CONFIG
     world, log = simulate(seed=args.seed, years=args.years)
 
-    lines = chronik(world, log, cfg)
+    lines = chronik_mit_zeitaltern(world, log, cfg)
     for line in lines:
         print(line)
 
@@ -59,12 +59,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     fragmentations = sum(1 for e in log if e.kind == EventKind.ABSPALTUNG)
     conversions = sum(1 for e in log if e.kind == EventKind.KONVERSION)
     schismata = sum(1 for e in log if e.kind == EventKind.SCHISMA)
+    shocks = sum(1 for e in log if e.kind in (EventKind.PEST, EventKind.ERDBEBEN, EventKind.DUERRE))
+    turning_points = sum(1 for e in log if e.kind == EventKind.WENDEPUNKT)
     print(
         f"--- {args.years} years, seed={args.seed}: "
         f"{len(world.polities)} nations, {len(world.rulers)} rulers, "
         f"{len(world.identities)} faiths, {successions} successions, "
         f"{fragmentations} fragmentations, {conversions} conversions, "
-        f"{schismata} schisms, {len(log)} events, {len(lines)} in chronicle"
+        f"{schismata} schisms, {shocks} disasters, {turning_points} turning points, "
+        f"{len(log)} events"
     )
 
     if args.explain > 0:

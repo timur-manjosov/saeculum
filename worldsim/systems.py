@@ -29,6 +29,7 @@ from worldsim.config import Config
 from worldsim.events import (
     Decision,
     Effect,
+    Event,
     EventDraft,
     EventId,
     EventKind,
@@ -53,6 +54,8 @@ __all__ = [
     "System",
     "consumption",
     "diplomacy",
+    "disaster",
+    "epoch",
     "expansion",
     "forge_ruler",
     "founding",
@@ -60,6 +63,7 @@ __all__ = [
     "identity",
     "population",
     "production",
+    "research",
     "ruler",
     "war",
 ]
@@ -116,13 +120,18 @@ def ruler(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
 
 
 def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Territorium erzeugt Ressourcen; die Nahrungsernte schwankt jaehrlich."""
+    """Territorium erzeugt Ressourcen; die Nahrungsernte schwankt jaehrlich.
+
+    Die erreichte Tech-Stufe hebt die Effizienz (Phase 5): fortgeschrittene Reiche
+    ernten und erwirtschaften mehr aus demselben Land.
+    """
     low, high = 1.0 - cfg.harvest_variance, 1.0 + cfg.harvest_variance
     for pid in sorted(world.polities):
         pol = world.polities[pid]
+        efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
         harvest = rng.uniform(low, high)
-        pol.stockpiles.nahrung += _land_capacity(world, pol, cfg) * harvest
-        pol.stockpiles.wohlstand += len(pol.territory) * cfg.wealth_per_region
+        pol.stockpiles.nahrung += _land_capacity(world, pol, cfg) * harvest * efficiency
+        pol.stockpiles.wohlstand += len(pol.territory) * cfg.wealth_per_region * efficiency
     return world
 
 
@@ -163,7 +172,8 @@ def population(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
                 )
             continue
 
-        capacity = _land_capacity(world, pol, cfg) / cfg.food_per_person
+        efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
+        capacity = _land_capacity(world, pol, cfg) * efficiency / cfg.food_per_person
         if capacity <= 0:
             continue
         growth = int(before * cfg.growth_rate * (1.0 - before / capacity))
@@ -267,7 +277,7 @@ def diplomacy(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     Feind seine Vormacht verliert.
     """
     pids = sorted(world.polities)
-    powers = {pid: _power(world.polities[pid]) for pid in pids}
+    powers = {pid: _power(world.polities[pid], cfg) for pid in pids}
     strongest = max(pids, key=lambda p: (powers[p], -p))
 
     _recompute_fear(world, pids, powers, cfg)
@@ -286,7 +296,7 @@ def war(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     Gegner wird in diesem Tick nicht erneut verwickelt.
     """
     pids = sorted(world.polities)
-    powers = {pid: _power(world.polities[pid]) for pid in pids}
+    powers = {pid: _power(world.polities[pid], cfg) for pid in pids}
     busy: set[EntityId] = set()
 
     for x in pids:
@@ -367,7 +377,8 @@ def _war_desire(
 
     weakness = 0.0
     weakness_causes: list[EventId] = []
-    if _power_of(world, y, powers) < _power_of(world, x, powers) * cfg.weakness_power_ratio:
+    power_x = _power_of(world, x, powers, cfg)
+    if _power_of(world, y, powers, cfg) < power_x * cfg.weakness_power_ratio:
         weakness += cfg.weakness_bonus
     ally_loss = _recent_subject_event(
         log, world.year, EventKind.BUENDNIS_BRUCH, y, cfg.cause_window_years
@@ -411,7 +422,7 @@ def _wage_war(
     )
 
     # Aufloesung: Vergleich der effektiven Macht (mit Verbuendeten) plus Jitter.
-    powers = {p: _power(world.polities[p]) for p in sorted(world.polities)}
+    powers = {p: _power(world.polities[p], cfg) for p in sorted(world.polities)}
     jitter = rng.uniform(-cfg.battle_jitter, cfg.battle_jitter)
     margin = (
         _effective_power(world, x, powers, cfg) - _effective_power(world, y, powers, cfg)
@@ -432,7 +443,7 @@ def _wage_war(
         effects.append(Effect(region, "owner", loser, winner))
     effects.append(Effect(loser, "population", loser_before, pl.population))
 
-    win_margin = (_power(pw) - _power(pl)) / cfg.power_reference
+    win_margin = (_power(pw, cfg) - _power(pl, cfg)) / cfg.power_reference
     subjects = (winner, loser, region) if region is not None else (winner, loser)
     battle_id = log.append(
         EventDraft(
@@ -859,7 +870,7 @@ def identity(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     Glaubensbrueder kann daran zerbrechen. Laeuft am Tick-Ende: die Affinitaets-
     Faktoren in Diplomatie/Krieg lesen die Identitaeten des Vorjahres.
     """
-    powers = {pid: _power(world.polities[pid]) for pid in sorted(world.polities)}
+    powers = {pid: _power(world.polities[pid], cfg) for pid in sorted(world.polities)}
     for pid in sorted(world.polities):
         _maybe_convert(world, pid, powers, cfg, log)
     for pid in sorted(world.polities):
@@ -1003,6 +1014,393 @@ def _maybe_schisma(
         )
 
 
+# === Schocks, Technologie, Wendepunkte (Phase 5) ============================
+
+def research(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """Wissen akkumuliert (innovation treibt die Rate); Schwellen schalten Tech frei.
+
+    Ueberschreitet eine Nation eine Wissens-Schwelle, steigt ihre Tech-Stufe — das
+    hebt fortan Produktion und Schlagkraft (siehe ``production``/``_power``) und
+    emittiert ein INNOVATION-Event (die erreichte Stufe benennt ein Zeitalter).
+    """
+    for pid in sorted(world.polities):
+        pol = world.polities[pid]
+        innovation = _effective_traits(world, pol).innovation
+        rate = cfg.research_base_rate * innovation * (
+            1.0 + pol.population / cfg.research_pop_scale
+        )
+        pol.stockpiles.wissen += rate
+        while (
+            pol.tech_level < len(cfg.tech_thresholds)
+            and pol.stockpiles.wissen >= cfg.tech_thresholds[pol.tech_level]
+        ):
+            before = pol.tech_level
+            pol.tech_level += 1
+            log.append(
+                EventDraft(
+                    year=world.year,
+                    kind=EventKind.INNOVATION,
+                    subjects=(pid,),
+                    factors=(Factor(FactorLabel.FORSCHUNG, pol.stockpiles.wissen),),
+                    effects=(
+                        Effect(pid, "tech_level", before, pol.tech_level),
+                        Effect(pid, "tech_age", None, cfg.tech_age_names[before]),
+                    ),
+                )
+            )
+    return world
+
+
+def disaster(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """3 behavioral unterschiedliche Schocks, die Gleichgewichte stoeren.
+
+    Pest (Bevoelkerung, ansteckend auf einen Nachbarn), Erdbeben (Wohlstand +
+    dauerhafte Kapazitaets-Narbe der Hauptstadt) und Duerre (Nahrungsvorrat +
+    Bevoelkerung). Jeder Schock ist ein exogener Wurzel-Event; spaetere Ereignisse
+    (Machtverschiebungen) verweisen kausal auf ihn (siehe ``epoch``).
+    """
+    for pid in sorted(world.polities):
+        pol = world.polities[pid]
+        density = pol.population / cfg.plague_density_scale
+        if rng.random() < cfg.plague_base_chance * (1.0 + density):
+            _strike_plague(world, pid, rng, cfg, log, source=None)
+        if rng.random() < cfg.quake_chance:
+            _strike_quake(world, pid, cfg, log)
+        if rng.random() < cfg.drought_chance:
+            _strike_drought(world, pid, cfg, log)
+    return world
+
+
+def _strike_plague(
+    world: World,
+    pid: EntityId,
+    rng: Stream,
+    cfg: Config,
+    log: EventLog,
+    source: EventId | None,
+) -> None:
+    """Pest: Bevoelkerungsverlust; der Ausbruch kann auf einen Nachbarn ueberspringen."""
+    pol = world.polities[pid]
+    before = pol.population
+    loss = int(before * cfg.plague_pop_loss)
+    if loss <= 0:
+        return
+    pol.population = before - loss
+    plague_id = log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.PEST,
+            subjects=(pid,),
+            factors=(Factor(FactorLabel.PEST, float(loss)),),
+            causes=(source,) if source is not None else (),
+            effects=(Effect(pid, "population", before, pol.population),),
+        )
+    )
+    # Nur der urspruengliche Ausbruch steckt weiter an (keine endlose Kaskade).
+    if source is not None:
+        return
+    for other in _bordering_nations(world, pol):
+        if rng.random() < cfg.plague_spread_chance:
+            _strike_plague(world, other, rng, cfg, log, source=plague_id)
+            break
+
+
+def _strike_quake(world: World, pid: EntityId, cfg: Config, log: EventLog) -> None:
+    """Erdbeben: zerstoert Wohlstand/Bevoelkerung und vernarbt die Hauptstadt-Kapazitaet."""
+    pol = world.polities[pid]
+    wealth_before = pol.stockpiles.wohlstand
+    pop_before = pol.population
+    pol.stockpiles.wohlstand = wealth_before * (1.0 - cfg.quake_wealth_loss)
+    pol.population = max(0, pop_before - int(pop_before * cfg.quake_pop_loss))
+    effects = [
+        Effect(pid, "wohlstand", wealth_before, pol.stockpiles.wohlstand),
+        Effect(pid, "population", pop_before, pol.population),
+    ]
+    subjects: tuple[EntityId, ...] = (pid,)
+    cap = pol.capital
+    if cap is not None:
+        region = world.regions[cap]
+        cap_before = region.food_capacity
+        region.food_capacity = cap_before * (1.0 - cfg.quake_capacity_scar)
+        effects.append(Effect(cap, "food_capacity", cap_before, region.food_capacity))
+        subjects = (pid, cap)
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.ERDBEBEN,
+            subjects=subjects,
+            factors=(Factor(FactorLabel.ERDBEBEN, wealth_before * cfg.quake_wealth_loss),),
+            effects=tuple(effects),
+        )
+    )
+
+
+def _strike_drought(world: World, pid: EntityId, cfg: Config, log: EventLog) -> None:
+    """Duerre: vernichtet den Nahrungsvorrat und kostet direkt Bevoelkerung."""
+    pol = world.polities[pid]
+    food_before = pol.stockpiles.nahrung
+    pop_before = pol.population
+    pol.stockpiles.nahrung = 0.0
+    pol.population = max(0, pop_before - int(pop_before * cfg.drought_pop_loss))
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.DUERRE,
+            subjects=(pid,),
+            factors=(Factor(FactorLabel.DUERRE, food_before),),
+            effects=(
+                Effect(pid, "nahrung", food_before, 0.0),
+                Effect(pid, "population", pop_before, pol.population),
+            ),
+        )
+    )
+
+
+def epoch(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """Wendepunkt-Waechter: erkennt Bruechen in Trends und emittiert WENDEPUNKT-Events.
+
+    Vier Trend-Waechter (Machtranking, Technologie-Aera, dominante Identitaet,
+    langlebigstes Buendnis, Territoriums-Trajektorie) vergleichen den aktuellen
+    Zustand gegen den erinnerten. Ein Bruch ⇒ ein benanntes Meta-Event mit Verweis
+    auf die **nahe Ursache** aus dem Kausalgraphen. Machtwechsel und der erste
+    industrielle Durchbruch begrenzen und benennen zudem ein Zeitalter.
+    """
+    _watch_hegemon(world, cfg, log)
+    _watch_industrial(world, cfg, log)
+    _watch_dominant_faith(world, cfg, log)
+    _watch_alliance_collapse(world, cfg, log)
+    _watch_territory_collapse(world, cfg, log)
+    return world
+
+
+def _begin_age(world: World) -> tuple[int, int]:
+    """Ruecke ins naechste Zeitalter vor; gib (alter, neuer) Index zurueck."""
+    prev = world.age_index
+    world.age_index = prev + 1
+    return prev, world.age_index
+
+
+def _watch_hegemon(world: World, cfg: Config, log: EventLog) -> None:
+    """Machtranking: ein neuer, klar ueberlegener Hegemon oeffnet ein neues Zeitalter."""
+    powers = {pid: _power(world.polities[pid], cfg) for pid in sorted(world.polities)}
+    if not powers:
+        return
+    top = max(sorted(powers), key=lambda p: (powers[p], -p))
+    old = world.hegemon
+    if old is None or old not in world.polities:
+        world.hegemon = top
+        return
+    if top == old or powers[top] < powers[old] * cfg.turning_hegemon_margin:
+        return
+
+    cause = _recent_setback(world, old, cfg, log)
+    if cause is None:
+        cause = _recent_subject_event(
+            log, world.year, EventKind.SCHLACHT, top, cfg.turning_cause_window
+        )
+    prev_age, new_age = _begin_age(world)
+    world.hegemon = top
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.WENDEPUNKT,
+            subjects=(top, old),
+            factors=(Factor(FactorLabel.MACHTWECHSEL, powers[top] / max(powers[old], 1.0)),),
+            causes=(cause,) if cause is not None else (),
+            effects=(Effect(top, "age", prev_age, new_age),),
+        )
+    )
+
+
+def _watch_industrial(world: World, cfg: Config, log: EventLog) -> None:
+    """Technologie-Aera: der erste Aufstieg in die hoechste Tech-Stufe weltweit."""
+    if world.industrial:
+        return
+    top_tier = len(cfg.tech_thresholds)
+    advanced = [
+        pid for pid in sorted(world.polities) if world.polities[pid].tech_level >= top_tier
+    ]
+    if not advanced:
+        return
+    world.industrial = True
+    pid = advanced[0]
+    cause = _recent_subject_event(
+        log, world.year, EventKind.INNOVATION, pid, cfg.turning_cause_window
+    )
+    prev_age, new_age = _begin_age(world)
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.WENDEPUNKT,
+            subjects=(pid,),
+            factors=(Factor(FactorLabel.TECHNOLOGISCHER_DURCHBRUCH, 1.0),),
+            causes=(cause,) if cause is not None else (),
+            effects=(
+                Effect(pid, "age", prev_age, new_age),
+                Effect(pid, "age_kind", None, "industrial"),
+            ),
+        )
+    )
+
+
+def _watch_dominant_faith(world: World, cfg: Config, log: EventLog) -> None:
+    """Dominante Identitaet: die territorial groesste Glaubensgemeinschaft wechselt."""
+    territory: dict[EntityId, int] = {}
+    for pid in sorted(world.polities):
+        faith = world.polities[pid].identity_id
+        if faith is None:
+            continue
+        territory[faith] = territory.get(faith, 0) + len(world.polities[pid].territory)
+    if not territory:
+        return
+    top = max(sorted(territory), key=lambda f: (territory[f], -f))
+    old = world.dominant_faith
+    if old is None or old not in world.identities:
+        world.dominant_faith = top
+        return
+    if top == old or territory[top] < territory.get(old, 0) * cfg.turning_faith_margin:
+        return
+
+    cause = _recent_faith_shift(world, top, cfg, log)
+    world.dominant_faith = top
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.WENDEPUNKT,
+            subjects=(top, old),
+            factors=(Factor(FactorLabel.GLAUBENSWANDEL, float(territory[top])),),
+            causes=(cause,) if cause is not None else (),
+        )
+    )
+
+
+def _watch_alliance_collapse(world: World, cfg: Config, log: EventLog) -> None:
+    """Langlebigstes Buendnis: zerbricht das aelteste (sehr alte) Buendnis ⇒ Wendepunkt."""
+    max_standing = _max_standing_alliance_age(world, log)
+    best_break: tuple[int, Event] | None = None
+    for event in log.by_year(world.year):
+        if event.kind != EventKind.BUENDNIS_BRUCH:
+            continue
+        a, b = event.subjects[0], event.subjects[1]
+        formed = _alliance_formation_year(log, a, b, event.id)
+        if formed is None:
+            continue
+        age = world.year - formed
+        if age < cfg.turning_alliance_min_years or age < max_standing:
+            continue
+        if best_break is None or age > best_break[0]:
+            best_break = (age, event)
+    if best_break is None:
+        return
+    age, event = best_break
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.WENDEPUNKT,
+            subjects=(event.subjects[0], event.subjects[1]),
+            factors=(Factor(FactorLabel.BUENDNISZERFALL, float(age)),),
+            causes=(event.id,),
+        )
+    )
+
+
+def _watch_territory_collapse(world: World, cfg: Config, log: EventLog) -> None:
+    """Territoriums-Trajektorie: ein Reich verliert einen Grossteil seines Hoechststands."""
+    for pid in sorted(world.polities):
+        pol = world.polities[pid]
+        size = len(pol.territory)
+        if size > pol.peak_territory:
+            pol.peak_territory = size
+            continue
+        peak = pol.peak_territory
+        if peak < cfg.turning_collapse_min_peak:
+            continue
+        if size > peak * cfg.turning_collapse_fraction:
+            continue
+        cause = _recent_setback(world, pid, cfg, log)
+        log.append(
+            EventDraft(
+                year=world.year,
+                kind=EventKind.WENDEPUNKT,
+                subjects=(pid,),
+                factors=(Factor(FactorLabel.GEBIETSKOLLAPS, float(peak - size)),),
+                causes=(cause,) if cause is not None else (),
+                effects=(Effect(pid, "peak_territory", peak, size),),
+            )
+        )
+        # Zuruecksetzen: der Kollaps muss neu erwachsen, um erneut zu feuern.
+        pol.peak_territory = size
+
+
+def _recent_setback(
+    world: World, pid: EntityId, cfg: Config, log: EventLog
+) -> EventId | None:
+    """Naheliegende Ursache eines Niedergangs: Schock > Niederlage > Abspaltung."""
+    window = cfg.turning_cause_window
+    disasters: list[EventId] = []
+    defeats: list[EventId] = []
+    splits: list[EventId] = []
+    shock_kinds = {EventKind.PEST, EventKind.ERDBEBEN, EventKind.DUERRE}
+    for event in log.by_subject(pid):
+        if world.year - event.year > window:
+            continue
+        subjects = event.subjects
+        if event.kind in shock_kinds:
+            disasters.append(event.id)
+        elif event.kind == EventKind.SCHLACHT and len(subjects) > 1 and subjects[1] == pid:
+            defeats.append(event.id)
+        elif event.kind == EventKind.ABSPALTUNG and len(subjects) >= 1 and subjects[0] == pid:
+            splits.append(event.id)
+    for bucket in (disasters, defeats, splits):
+        if bucket:
+            return bucket[-1]
+    return None
+
+
+def _recent_faith_shift(
+    world: World, faith: EntityId, cfg: Config, log: EventLog
+) -> EventId | None:
+    """Naheliegende Ursache eines Glaubenswandels: jüngstes Schisma/jüngste Konversion."""
+    window = cfg.turning_cause_window
+    found: list[EventId] = []
+    for event in log.by_subject(faith):
+        if world.year - event.year > window:
+            continue
+        if event.kind in {EventKind.SCHISMA, EventKind.KONVERSION}:
+            found.append(event.id)
+    return found[-1] if found else None
+
+
+def _max_standing_alliance_age(world: World, log: EventLog) -> int:
+    """Alter (Jahre) des aeltesten noch bestehenden Buendnisses."""
+    best = 0
+    seen: set[tuple[EntityId, EntityId]] = set()
+    for pid in sorted(world.polities):
+        for ally in world.polities[pid].allies:
+            pair = (min(pid, ally), max(pid, ally))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            formed = _alliance_formation_year(log, pair[0], pair[1], len(log))
+            if formed is not None:
+                best = max(best, world.year - formed)
+    return best
+
+
+def _alliance_formation_year(
+    log: EventLog, a: EntityId, b: EntityId, before_id: EventId
+) -> int | None:
+    """Jahr des juengsten BUENDNIS-Schlusses zwischen a und b vor ``before_id``."""
+    pair = {a, b}
+    formed: int | None = None
+    for event in log.by_kind(EventKind.BUENDNIS):
+        if event.id >= before_id:
+            break
+        if pair <= set(event.subjects):
+            formed = event.year
+    return formed
+
+
 # === Diplomatie-Helfer ======================================================
 
 def _recompute_fear(
@@ -1101,7 +1499,7 @@ def _break_alliances(
     world: World, pids: list[EntityId], cfg: Config, log: EventLog
 ) -> None:
     """Loese Buendnisse bei Trust-Verfall oder wenn der Hegemon nicht mehr droht."""
-    powers = {pid: _power(world.polities[pid]) for pid in pids}
+    powers = {pid: _power(world.polities[pid], cfg) for pid in pids}
     strongest = max(pids, key=lambda p: (powers[p], -p))
 
     for a in pids:
@@ -1131,12 +1529,18 @@ def _break_alliances(
 
 # === reine Helfer ===========================================================
 
-def _power(pol: Polity) -> float:
-    """Schlagkraft (Phase 2 abgeleitet aus Bevoelkerung; Tech/Oekonomie folgen)."""
-    return float(pol.population)
+def _power(pol: Polity, cfg: Config) -> float:
+    """Schlagkraft aus Bevoelkerung, gehoben durch die erreichte Tech-Stufe.
+
+    Technologie ist ein Multiplikator auf die rohe Masse: ein kleineres, aber
+    fortgeschritteneres Reich kann ein groesseres schlagen (Phase 5).
+    """
+    return float(pol.population) * (1.0 + pol.tech_level * cfg.tech_power_bonus)
 
 
-def _power_of(world: World, pid: EntityId, powers: dict[EntityId, float]) -> float:
+def _power_of(
+    world: World, pid: EntityId, powers: dict[EntityId, float], cfg: Config
+) -> float:
     """Macht aus dem Snapshot; faellt auf Live-Berechnung zurueck.
 
     Der Snapshot wird je System einmal gebildet; entsteht **innerhalb** des Ticks
@@ -1144,7 +1548,7 @@ def _power_of(world: World, pid: EntityId, powers: dict[EntityId, float]) -> flo
     sie im Snapshot — dann gilt ihre aktuelle Macht.
     """
     cached = powers.get(pid)
-    return cached if cached is not None else _power(world.polities[pid])
+    return cached if cached is not None else _power(world.polities[pid], cfg)
 
 
 def _effective_power(
@@ -1152,9 +1556,9 @@ def _effective_power(
 ) -> float:
     """Eigene Macht plus anteiligen Beitrag der Verbuendeten (Koalition)."""
     pol = world.polities[pid]
-    total = _power_of(world, pid, powers)
+    total = _power_of(world, pid, powers, cfg)
     for ally in pol.allies:
-        total += _power_of(world, ally, powers) * cfg.ally_power_contribution
+        total += _power_of(world, ally, powers, cfg) * cfg.ally_power_contribution
     return total
 
 

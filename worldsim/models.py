@@ -204,6 +204,13 @@ class Polity:
     # ``World.identities``. Gleiche id ⇒ Affinitaet, verschiedene id ⇒ Reibung.
     identity_id: EntityId | None = None
 
+    # --- Phase 5: Technologie ----------------------------------------------
+    # Erreichte Tech-Stufe (0 = Anfang). Hebt Produktion und Schlagkraft; ihr
+    # Wissen (``stockpiles.wissen``) akkumuliert und schaltet an Schwellen
+    # Zeitalter frei. ``peak_territory`` speist die Kollaps-Erkennung (Phase 5).
+    tech_level: int = 0
+    peak_territory: int = 0
+
     # --- fuer spaetere Phasen reserviert -----------------------------------
     members: tuple[EntityId, ...] = ()
     legitimacy: float = 0.0
@@ -241,5 +248,17 @@ class World:
     # Identitaets-Register (Phase 4). Durch Schisma entstandene Identitaeten
     # kommen hinzu; alle bleiben fuer die Chronik namentlich aufloesbar.
     identities: dict[EntityId, Identity] = field(default_factory=dict)
+
+    # --- Phase 5: Wendepunkt-Erkennung & Zeitalter -------------------------
+    # Erinnerte Trend-Zustaende, gegen die der ``epoch``-Waechter je Tick
+    # vergleicht (reine Daten). Ein Bruch ⇒ WENDEPUNKT-Meta-Event.
+    hegemon: EntityId | None = None  # aktuell staerkstes Reich
+    dominant_faith: EntityId | None = None  # territorial groesste Identitaet
+    industrial: bool = False  # ob die Industrielle Revolution schon begann
+    # Laufendes Zeitalter: Name und fortlaufender Index (Zeitalter werden durch
+    # Wendepunkte begrenzt und benannt).
+    age_name: str = ""
+    age_index: int = 0
+
     # Deterministischer ID-Zaehler.
     next_id: EntityId = 0

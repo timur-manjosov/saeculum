@@ -73,6 +73,15 @@ def _assert_world_invariants(world: World, cfg: Config) -> None:
         if ident.parent is not None:
             assert ident.parent in world.identities
 
+    # Phase 5: Technologie/Wissen bleiben im gueltigen Bereich; Regionen behalten
+    # trotz Erdbeben-Narben eine positive Nahrungskapazitaet.
+    for pol in world.polities.values():
+        assert pol.tech_level >= 0
+        assert pol.stockpiles.wissen >= 0.0
+        assert pol.peak_territory >= 0
+    for region in world.regions.values():
+        assert region.food_capacity > 0.0
+
 
 @pytest.mark.parametrize("seed", [1, 42, 1234])
 def test_invariants_hold_every_tick(seed: int) -> None:

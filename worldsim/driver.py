@@ -31,6 +31,8 @@ from worldsim.systems import (
     System,
     consumption,
     diplomacy,
+    disaster,
+    epoch,
     expansion,
     forge_ruler,
     founding,
@@ -38,6 +40,7 @@ from worldsim.systems import (
     identity,
     population,
     production,
+    research,
     ruler,
     war,
 )
@@ -50,6 +53,9 @@ __all__ = ["SYSTEMS", "simulate", "worldgen"]
 SYSTEMS: list[tuple[str, System]] = [
     ("founding", founding),
     ("ruler", ruler),
+    # Forschung vor der Produktion: die erreichte Tech-Stufe hebt noch dieses Jahr
+    # Effizienz und Schlagkraft.
+    ("research", research),
     ("production", production),
     ("consumption", consumption),
     ("population", population),
@@ -60,6 +66,10 @@ SYSTEMS: list[tuple[str, System]] = [
     # Am Tick-Ende: Glaubensausbreitung (Konversion) und Schisma. Die Affinitaets-
     # Faktoren in Diplomatie/Krieg lesen die Identitaeten des Vorjahres.
     ("identity", identity),
+    # Danach exogene Schocks (Pest/Erdbeben/Duerre), die Gleichgewichte stoeren ...
+    ("disaster", disaster),
+    # ... und zuletzt die Wendepunkt-Waechter, die den Ausgang des Jahres deuten.
+    ("epoch", epoch),
 ]
 
 # --- kosmetische Namensgebung (Flavour, getrennter RNG-Strom) --------------

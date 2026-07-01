@@ -24,12 +24,15 @@ from worldsim.models import EntityId, World
 __all__ = [
     "annalen",
     "chronik",
+    "chronik_mit_zeitaltern",
     "dominante_faktoren",
+    "epochen",
     "erklaere",
     "folgen",
     "lebenslauf",
     "warum",
     "wichtigkeit",
+    "zentralitaet",
 ]
 
 
@@ -78,13 +81,45 @@ def warum(log: EventLog, event_id: EventId) -> list[tuple[Event, tuple[tuple[str
     return chain
 
 
+# --- kausale Zentralitaet: nachgelagerte Reichweite im Graphen --------------
+
+def zentralitaet(log: EventLog) -> dict[EventId, int]:
+    """Zaehle je Event die im Kausalgraphen **erreichbaren Folgen** (Nachfahren).
+
+    Reine Graph-Kennzahl: die transitive Vorwaerts-Reichweite (distinkte
+    Nachfahren) misst, wie folgenreich ein Ereignis war. Da ``causes`` stets auf
+    **fruehere** Events zeigen (id kleiner), werden die Knoten in absteigender id
+    verarbeitet — jedes Kind ist dann schon ausgewertet (topologische Ordnung).
+    """
+    children: dict[EventId, list[EventId]] = {}
+    for event in log:
+        for cause in event.causes:
+            children.setdefault(cause, []).append(event.id)
+
+    descendants: dict[EventId, set[EventId]] = {}
+    reach: dict[EventId, int] = {}
+    for event in sorted(log, key=lambda e: e.id, reverse=True):
+        seen: set[EventId] = set()
+        for child in children.get(event.id, ()):
+            seen.add(child)
+            seen |= descendants.get(child, frozenset())
+        descendants[event.id] = seen
+        reach[event.id] = len(seen)
+    return reach
+
+
 # --- Wichtigkeit (§6): selbst eine Summe benannter Faktoren -----------------
 
-def wichtigkeit(event: Event) -> tuple[float, tuple[Factor, ...]]:
+def wichtigkeit(
+    event: Event, reach: int = 0, weight: float = 0.0, cap: float = 0.0
+) -> tuple[float, tuple[Factor, ...]]:
     """Berechne den Wichtigkeits-Score als Summe benannter Faktoren.
 
     Gibt ``(score, faktoren)`` zurueck — die Faktoren SIND die Begruendung, auch
-    fuer die Auswahl, was Geschichte „wert" ist.
+    fuer die Auswahl, was Geschichte „wert" ist. ``reach`` ist die kausale
+    Zentralitaet (Zahl erreichbarer Folgen); sie tritt als eigener, gedeckelter
+    Faktor hinzu — hochzentrale Ereignisse praegen die Chronik (Rekursion des
+    Kernprinzips auf die Auswahl selbst).
     """
     factors: tuple[Factor, ...]
     match event.kind:
@@ -121,8 +156,17 @@ def wichtigkeit(event: Event) -> tuple[float, tuple[Factor, ...]]:
             factors = (Factor(FactorLabel.BEKEHRUNG, 3.0),)
         case EventKind.SCHISMA:
             factors = (Factor(FactorLabel.GLAUBENSSPALTUNG, 4.5),)
+        case EventKind.PEST | EventKind.ERDBEBEN | EventKind.DUERRE:
+            deaths = _population_loss(event.effects)
+            factors = (Factor(FactorLabel.KATASTROPHE, 1.5 + deaths / 60.0),)
+        case EventKind.INNOVATION:
+            factors = (Factor(FactorLabel.TECHNOLOGISCHER_DURCHBRUCH, 3.0),)
+        case EventKind.WENDEPUNKT:
+            factors = (Factor(FactorLabel.WENDEPUNKT, 5.0),)
         case _:
             factors = ()
+    if reach > 0 and weight > 0.0:
+        factors = (*factors, Factor(FactorLabel.ZENTRALITAET, min(reach * weight, cap)))
     score = sum(f.weight for f in factors)
     return score, factors
 
@@ -135,9 +179,50 @@ def chronik(world: World, log: EventLog, cfg: Config) -> list[str]:
     Reihenfolge: nach Jahr, dann Emissions-id (stabil). Beispielzeile:
     ``Year 35: Veldoria expanded into the eastern plains``.
     """
+    reach = zentralitaet(log)
     lines: list[str] = []
     for event in sorted(log, key=lambda e: (e.year, e.id)):
-        score, _ = wichtigkeit(event)
+        score, _ = wichtigkeit(
+            event, reach.get(event.id, 0), cfg.centrality_weight, cfg.centrality_cap
+        )
+        if score < cfg.chronicle_min_importance:
+            continue
+        lines.append(_narrate(world, event, log))
+    return lines
+
+
+def epochen(world: World, log: EventLog) -> list[tuple[int, str]]:
+    """Die benannten Zeitalter als ``(Startjahr, Name)`` — begrenzt durch Wendepunkte.
+
+    Das erste Zeitalter ("the First Expansion") laeuft bis zum ersten
+    zeitalter-definierenden Wendepunkt (Machtwechsel/industrieller Durchbruch).
+    """
+    ages: list[tuple[int, str]] = [(0, "the First Expansion")]
+    for event in sorted(log, key=lambda e: (e.year, e.id)):
+        if event.kind == EventKind.WENDEPUNKT and any(
+            eff.field == "age" for eff in event.effects
+        ):
+            ages.append((event.year, _age_name_of(world, event)))
+    return ages
+
+
+def chronik_mit_zeitaltern(world: World, log: EventLog, cfg: Config) -> list[str]:
+    """Wie ``chronik``, aber gegliedert in benannte Zeitalter (Ueberschriften).
+
+    Ein zeitalter-definierender Wendepunkt eroeffnet einen neuen Abschnitt; die
+    Wendepunkt-Zeile selbst bleibt als erster Eintrag des neuen Zeitalters stehen.
+    """
+    reach = zentralitaet(log)
+    lines: list[str] = ["=== the First Expansion ==="]
+    for event in sorted(log, key=lambda e: (e.year, e.id)):
+        if event.kind == EventKind.WENDEPUNKT and any(
+            eff.field == "age" for eff in event.effects
+        ):
+            lines.append("")
+            lines.append(f"=== {_age_name_of(world, event)} (from year {event.year}) ===")
+        score, _ = wichtigkeit(
+            event, reach.get(event.id, 0), cfg.centrality_weight, cfg.centrality_cap
+        )
         if score < cfg.chronicle_min_importance:
             continue
         lines.append(_narrate(world, event, log))
@@ -215,6 +300,25 @@ def _narrate(world: World, event: Event, log: EventLog) -> str:
                 f"Year {event.year}: the {new_faith} faith schismed from the "
                 f"{old_faith} faith within {nation}."
             )
+        case EventKind.PEST:
+            deaths = _population_loss(event.effects)
+            spread = bool(event.causes)
+            verb = "spread to" if spread else "struck"
+            return f"Year {event.year}: a plague {verb} {nation}, killing {deaths}."
+        case EventKind.ERDBEBEN:
+            deaths = _population_loss(event.effects)
+            return (
+                f"Year {event.year}: an earthquake devastated {nation}, "
+                f"killing {deaths} and ruining its wealth."
+            )
+        case EventKind.DUERRE:
+            deaths = _population_loss(event.effects)
+            return f"Year {event.year}: a drought parched {nation}, killing {deaths}."
+        case EventKind.INNOVATION:
+            age = _tech_age(event.effects)
+            return f"Year {event.year}: {nation} advanced into {age}."
+        case EventKind.WENDEPUNKT:
+            return _narrate_turning_point(world, event, log)
         case _:  # pragma: no cover - alle aktiven Arten sind oben abgedeckt
             return f"Year {event.year}: {nation} ({event.kind})."
 
@@ -289,6 +393,76 @@ def _schisma_cause(log: EventLog, event: Event) -> Event | None:
         if cause.kind == EventKind.SCHISMA:
             return cause
     return None
+
+
+_DISASTER_WORDS: dict[EventKind, str] = {
+    EventKind.PEST: "plague",
+    EventKind.ERDBEBEN: "earthquake",
+    EventKind.DUERRE: "drought",
+}
+
+
+def _disaster_cause(log: EventLog, event: Event) -> str | None:
+    """Das Wort fuer einen Schock unter den Ursachen (fuer "dies ermoeglichte das")."""
+    for cause_id in event.causes:
+        word = _DISASTER_WORDS.get(log.get(cause_id).kind)
+        if word is not None:
+            return word
+    return None
+
+
+def _narrate_turning_point(world: World, event: Event, log: EventLog) -> str:
+    """Erzaehle einen Wendepunkt; bei Machtwechsel eine kausale "ermoeglichte"-Aussage."""
+    labels = {f.label for f in event.factors}
+    year = event.year
+    if FactorLabel.MACHTWECHSEL in labels:
+        new = _nation_name(world, event.subjects[0])
+        old = _nation_name(world, event.subjects[1]) if len(event.subjects) > 1 else "a rival"
+        # Zeitliche Naehe + Kausalgraph: lag ein Schock kurz vor der Machtverschiebung?
+        shock = _disaster_cause(log, event)
+        if shock is not None:
+            return (
+                f"Year {year}: the {shock} that had weakened {old} allowed {new} "
+                f"to rise to dominance — a turning point."
+            )
+        return (
+            f"Year {year}: {new} supplanted {old} as the dominant power "
+            f"— a turning point."
+        )
+    if FactorLabel.TECHNOLOGISCHER_DURCHBRUCH in labels:
+        nation = _nation_name(world, event.subjects[0])
+        return f"Year {year}: {nation} ushered in the Industrial Age — a turning point."
+    if FactorLabel.GLAUBENSWANDEL in labels:
+        faith = _identity_name(world, event.subjects[0])
+        return f"Year {year}: the {faith} faith became the dominant creed — a turning point."
+    if FactorLabel.BUENDNISZERFALL in labels:
+        a = _nation_name(world, event.subjects[0])
+        b = _nation_name(world, event.subjects[1])
+        span = int(next(f.weight for f in event.factors if f.label == FactorLabel.BUENDNISZERFALL))
+        return (
+            f"Year {year}: the ancient alliance between {a} and {b} collapsed after "
+            f"{span} years — a turning point."
+        )
+    if FactorLabel.GEBIETSKOLLAPS in labels:
+        nation = _nation_name(world, event.subjects[0])
+        return f"Year {year}: {nation} collapsed, losing much of its realm — a turning point."
+    return f"Year {year}: a turning point reshaped the age."  # pragma: no cover
+
+
+def _age_name_of(world: World, event: Event) -> str:
+    """Der Name des durch einen Wendepunkt eroeffneten Zeitalters."""
+    for eff in event.effects:
+        if eff.field == "age_kind" and eff.after == "industrial":
+            return "the Industrial Age"
+    return f"the Age of {_nation_name(world, event.subjects[0])}"
+
+
+def _tech_age(effects: tuple[Effect, ...]) -> str:
+    """Lies das durch eine Innovation erreichte Zeitalter aus dem Effekt."""
+    for effect in effects:
+        if effect.field == "tech_age":
+            return str(effect.after)
+    return "a new age"
 
 
 def _accession_mode(effects: tuple[Effect, ...]) -> str:

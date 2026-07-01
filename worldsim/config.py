@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 5
+    config_version: int = 6
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -183,6 +183,61 @@ class Config:
     # Nur so viele Jahre nach dem Machtantritt kann der neue Herrscher ein Schisma
     # ausloesen (kleines Fenster ⇒ ein Impuls je Thronwechsel, kein Dauerdruck).
     schism_window_years: int = 1
+
+    # --- research/Tech: Wissen akkumuliert, Schwellen schalten Zeitalter frei ---
+    # Grund-Wissenszuwachs je Jahr, durch den innovation-Trait und die Bevoelkerung
+    # skaliert (grosse, erfinderische Reiche forschen schneller).
+    research_base_rate: float = 1.0
+    research_pop_scale: float = 800.0
+    # Aufsteigende Wissens-Schwellen je Tech-Stufe; Ueberschreiten ⇒ INNOVATION.
+    tech_thresholds: tuple[float, ...] = (40.0, 120.0, 280.0)
+    # Namen der durch die Tech-Stufen erreichten Zeitalter (parallel dazu).
+    tech_age_names: tuple[str, ...] = (
+        "the Bronze Age",
+        "the Iron Age",
+        "the Industrial Age",
+    )
+    # Produktions- und Militaerbonus je erreichter Tech-Stufe.
+    tech_production_bonus: float = 0.15
+    tech_power_bonus: float = 0.25
+
+    # --- disaster: stochastische Schocks, die Gleichgewichte stoeren -----------
+    # Pest: trifft dichte (grosse) Reiche eher, kostet einen Bevoelkerungsanteil,
+    # kann auf einen Nachbarn ueberspringen (Ansteckung).
+    plague_base_chance: float = 0.010
+    plague_density_scale: float = 2500.0
+    plague_pop_loss: float = 0.30
+    plague_spread_chance: float = 0.40
+    # Erdbeben: zerstoert Wohlstand, etwas Bevoelkerung und vernarbt dauerhaft die
+    # Nahrungskapazitaet der Hauptstadtregion (bleibende geografische Folge).
+    quake_chance: float = 0.012
+    quake_wealth_loss: float = 0.60
+    quake_pop_loss: float = 0.05
+    quake_capacity_scar: float = 0.15
+    # Duerre: vernichtet den Nahrungsvorrat und kostet direkt Bevoelkerung.
+    drought_chance: float = 0.015
+    drought_pop_loss: float = 0.08
+
+    # --- Wendepunkt-Erkennung & Zeitalter (Phase 5) ---------------------------
+    # Machtranking: der neue Hegemon muss den alten um diese Marge uebertreffen
+    # (Hysterese gegen Flattern bei knappen Machtverhaeltnissen).
+    turning_hegemon_margin: float = 1.15
+    # Dominante Identitaet: die neue Groesste muss die alte klar (um diese Marge)
+    # schlagen — sonst flattert der "dominante Glaube" bei knappen Verhaeltnissen.
+    turning_faith_margin: float = 1.6
+    # Buendnis: nur der Bruch eines mindestens so langlebigen Buendnisses zaehlt.
+    turning_alliance_min_years: int = 25
+    # Territoriums-Kollaps: Verlust von mindestens diesem Anteil des Hoechststands.
+    turning_collapse_fraction: float = 0.5
+    turning_collapse_min_peak: int = 4
+    # Fenster (Jahre) fuer die Suche nach der nahen Ursache eines Wendepunkts.
+    turning_cause_window: int = 8
+
+    # --- chronicle: kausale Zentralitaet als Wichtigkeits-Faktor --------------
+    # Jede im Kausalgraphen erreichbare Folge hebt die Wichtigkeit eines Events
+    # (hochzentrale Ereignisse praegen die Chronik), gedeckelt gegen Ausreisser.
+    centrality_weight: float = 0.12
+    centrality_cap: float = 3.0
 
     # --- chronicle: Wichtigkeits-Schwelle fuer die Text-Chronik ------------
     # Foundings/Expansionen/Meilensteine liegen darueber; kleine Hungersnoete
