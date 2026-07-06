@@ -1,13 +1,16 @@
-"""render — die einzige Pixel-erzeugende Schicht: Live-Dashboard, Replay, Steuerung.
+"""render — die Zeitraffer-Ansicht (Replay) samt Beobachtungs-Steuerung.
 
 Baut auf ``rich``. Konsumiert **read-only** ``World`` + ``EventLog`` und die
-zentrale ``event_to_visual``-Abbildung — beide Ansichten (Live und Replay) teilen
-denselben ``ViewState``-Reducer und dieselbe Optik. **Keine** Simulationslogik,
-**keine** Re-Simulation: Replay spielt nur den gespeicherten Log ab.
+zentrale ``event_to_visual``-Abbildung — Replay teilt den ``ViewState``-Reducer
+und die Optik mit der Live-Ansicht. **Keine** Simulationslogik, **keine**
+Re-Simulation: Replay spielt nur den gespeicherten Log ab. (Die Jahr-fuer-Jahr
+*treibende* Live-Ansicht liegt in ``watch``.)
 
 Auf einem echten Terminal animiert ``rich.Live`` mit Tempo-/Pause-/Schritt-/
 Beenden-Steuerung. Ohne Terminal (Pipe, Tests) werden stattdessen einige
-Schnappschuss-Frames als Text gedruckt — schnell und ohne Schlafphasen.
+Schnappschuss-Frames als Text gedruckt — schnell und ohne Schlafphasen. Die
+Pacing-Bausteine (``Steuerung``, Tastenpumpe, Schnappschuss-Jahre) teilt Replay
+mit ``watch``.
 """
 
 from __future__ import annotations
@@ -20,7 +23,6 @@ from dataclasses import dataclass
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -28,11 +30,11 @@ from worldsim.chronicle import erzaehle
 from worldsim.config import Config
 from worldsim.events import Event, EventKind, EventLog
 from worldsim.models import World
-from worldsim.presentation.components import ereignis_text
+from worldsim.presentation.components import feed_tafel
 from worldsim.presentation.visual import ViewState
 from worldsim.presentation.worldmap import render_map
 
-__all__ = ["Steuerung", "live_dashboard", "replay"]
+__all__ = ["Steuerung", "replay"]
 
 _FEED = 9  # Zeilen im Ereignis-Feed
 _TOP = 6  # angezeigte Top-Nationen
@@ -88,18 +90,6 @@ def _top_table(world: World, view: ViewState) -> Table:
     return table
 
 
-def _feed_panel(feed: deque[tuple[EventKind, str]]) -> Panel:
-    """Das Feed-Panel der juengsten Ereignisse — dieselbe Zeile wie die statische Chronik."""
-    text = Text()
-    for i, (kind, line) in enumerate(feed):
-        if i:
-            text.append("\n")
-        text.append_text(ereignis_text(kind, line))
-    if not feed:
-        text.append("…", style="dim")
-    return Panel(text, title="recent events", border_style="grey50")
-
-
 def _frame(
     world: World,
     view: ViewState,
@@ -126,7 +116,7 @@ def _frame(
     if show_map:
         body.append(render_map(world, seed=seed, owners=dict(view.owner)))
     body.append(_top_table(world, view))
-    body.append(_feed_panel(feed))
+    body.append(feed_tafel(feed))
     return Group(*body)
 
 
@@ -220,28 +210,6 @@ def _snapshot_years(max_year: int, count: int) -> set[int]:
         return {max_year}
     step = max_year / (count - 1)
     return {min(max_year, round(i * step)) for i in range(count)} | {max_year}
-
-
-def live_dashboard(
-    world: World,
-    log: EventLog,
-    cfg: Config,
-    *,
-    seed: int = 0,
-    fps: float = 8.0,
-    show_map: bool = True,
-    console: Console | None = None,
-) -> None:
-    """Live-Dashboard: aktuelles Jahr, Top-Nationen, juengste Events (Aufgabe 2).
-
-    Spielt die visuelle Historie im normalen Tempo ab (Beobachtung, keine
-    Steuerung). Auf einem TTY animiert es; sonst druckt es Schnappschuss-Frames.
-    """
-    _ = cfg  # read-only Signatur-Konsistenz; die Ansicht braucht keine Config
-    _play(
-        world, log, seed=seed, title="LIVE", base_delay=1.0 / max(fps, 0.1),
-        interactive=False, show_map=show_map, console=console, snapshot_frames=5,
-    )
 
 
 def replay(

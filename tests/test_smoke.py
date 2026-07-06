@@ -28,6 +28,20 @@ def test_zero_years_keeps_initial_world() -> None:
     assert len(log) == 0
 
 
+def test_region_coordinates_are_deterministic() -> None:
+    """worldgen verortet jede Region reproduzierbar in [0,1)^2 (Koordinaten-Determinismus)."""
+    wa, _ = simulate(seed=42, years=0)
+    coords_a = {rid: r.coord for rid, r in wa.regions.items()}
+    coords_b = {rid: r.coord for rid, r in simulate(seed=42, years=0)[0].regions.items()}
+
+    assert coords_a == coords_b  # gleicher Seed ⇒ identische Geografie
+    assert all(0.0 <= x < 1.0 and 0.0 <= y < 1.0 for x, y in coords_a.values())
+    assert len(set(coords_a.values())) > 1  # tatsaechlich gestreut
+    # Anderer Seed ⇒ andere Geografie.
+    coords_c = {rid: r.coord for rid, r in simulate(seed=99, years=0)[0].regions.items()}
+    assert coords_c != coords_a
+
+
 def test_world_is_alive() -> None:
     """Gruendung jeder Nation, plus Expansion und Wachstum als emergente Folgen."""
     world, log = simulate(seed=42, years=100)

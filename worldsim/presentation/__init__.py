@@ -12,9 +12,17 @@ Zwei Prinzipien tragen alles:
   Log (kein Re-Simulieren): Replay reproduziert die Historie konsistent.
 """
 
-from worldsim.presentation.components import bilanz_tafel, ereignis_text, zeitalter_regel
+from worldsim.presentation.components import (
+    bilanz_tafel,
+    ereignis_text,
+    faktoren_text,
+    feed_tafel,
+    kausal_zeile,
+    zeitalter_regel,
+)
+from worldsim.presentation.palette import ROSE_PINE_MOON, Palette
 from worldsim.presentation.query import warum_entitaet, warum_event
-from worldsim.presentation.render import Steuerung, live_dashboard, replay
+from worldsim.presentation.render import Steuerung, replay
 from worldsim.presentation.static import render_chronik
 from worldsim.presentation.stats import (
     bevoelkerung_verlauf,
@@ -30,9 +38,12 @@ from worldsim.presentation.visual import (
     event_to_visual,
     visuelle_historie,
 )
+from worldsim.presentation.watch import watch, weltlauf
 from worldsim.presentation.worldmap import biome_grid, render_map
 
 __all__ = [
+    "ROSE_PINE_MOON",
+    "Palette",
     "Steuerung",
     "ViewState",
     "VisualEffect",
@@ -43,7 +54,9 @@ __all__ = [
     "ereignis_text",
     "ereignisse_pro_jahr",
     "event_to_visual",
-    "live_dashboard",
+    "faktoren_text",
+    "feed_tafel",
+    "kausal_zeile",
     "macht_verlauf",
     "render_chronik",
     "render_map",
@@ -52,6 +65,8 @@ __all__ = [
     "visuelle_historie",
     "warum_entitaet",
     "warum_event",
+    "watch",
+    "weltlauf",
     "zeitalter_regel",
     "zusammenfassung_zeilen",
 ]

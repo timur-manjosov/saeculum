@@ -26,7 +26,6 @@ from worldsim.presentation import (
     biome_grid,
     ereignisse_pro_jahr,
     event_to_visual,
-    live_dashboard,
     macht_verlauf,
     render_map,
     replay,
@@ -34,6 +33,8 @@ from worldsim.presentation import (
     visuelle_historie,
     warum_entitaet,
     warum_event,
+    watch,
+    weltlauf,
     zusammenfassung_zeilen,
 )
 from worldsim.presentation.query import finde_kollaps
@@ -61,14 +62,20 @@ def test_every_event_maps_to_a_visual() -> None:
 
 
 def test_visual_kinds_match_intent() -> None:
-    """Krieg ist rot, Katastrophen blitzen, Gruendung setzt eine Stadt."""
+    """Krieg traegt den roten Akzent, Katastrophen blitzen, Gruendung setzt eine Stadt."""
+    from worldsim.presentation import ROSE_PINE_MOON
+
     _, log = simulate(seed=42, years=150)
     by_kind = {}
     for e in log:
         by_kind.setdefault(e.kind, event_to_visual(e))
     assert by_kind[EventKind.KRIEG].kind == VisualKind.KRIEG
-    assert "red" in by_kind[EventKind.KRIEG].color
+    # Farbe traegt Bedeutung: Krieg ist der ``love``-Akzent (Rot) der zentralen Palette.
+    assert by_kind[EventKind.KRIEG].color == ROSE_PINE_MOON.love
     assert by_kind[EventKind.GRUENDUNG].kind == VisualKind.STADT
+    # Abspaltung ist eine dynastische Spaltung ⇒ violett (``iris``), nicht gruen.
+    if EventKind.ABSPALTUNG in by_kind:
+        assert by_kind[EventKind.ABSPALTUNG].color == ROSE_PINE_MOON.iris
     for shock in (EventKind.PEST, EventKind.ERDBEBEN, EventKind.DUERRE):
         if shock in by_kind:
             assert by_kind[shock].flash is True
@@ -213,14 +220,12 @@ def test_stats_series_are_derivable_and_nonempty() -> None:
 # --- Aufgabe 5: prozedurale Karte (deterministisch) ---------------------------
 
 def test_biome_grid_is_deterministic() -> None:
-    world, _ = simulate(seed=42, years=10)
-    a = biome_grid(world, seed=42)
-    b = biome_grid(world, seed=42)
-    assert list(a) == list(b)
-    assert a.shape == (len(world.regions),)
-    # Anderer Seed ⇒ (mit hoher Wahrscheinlichkeit) andere Biome.
-    c = biome_grid(world, seed=99)
-    assert list(a) != list(c)
+    """Das Terrain-Feld ist eine reine, reproduzierbare Funktion des Seeds (2D-Gitter)."""
+    a = biome_grid(42)
+    assert a.ndim == 2 and a.shape[0] >= 1 and a.shape[1] >= 1
+    assert a.tolist() == biome_grid(42).tolist()  # deterministisch (gecacht)
+    # Anderer Seed ⇒ anderes Terrain.
+    assert a.tolist() != biome_grid(99).tolist()
 
 
 def test_render_map_runs_headless() -> None:
@@ -228,23 +233,67 @@ def test_render_map_runs_headless() -> None:
     view = ViewState()
     for e in log:
         view.apply(e)
-    console = Console(force_terminal=False, width=100, record=True)
+    console = Console(force_terminal=False, width=120, record=True)
     console.print(render_map(world, seed=42, owners=dict(view.owner)))
     out = console.export_text()
     assert "world map" in out
 
 
+def test_map_paints_territories_in_polity_palette() -> None:
+    """Territorien erscheinen in Polity-Farben der Rosé-Pine-Palette (wandernde Grenzen)."""
+    from worldsim.presentation import ROSE_PINE_MOON
+
+    world, _ = simulate(seed=42, years=150)
+    assert any(r.owner is not None for r in world.regions.values())  # es gibt Territorien
+
+    console = Console(force_terminal=True, color_system="truecolor", width=120, record=True)
+    console.print(render_map(world, seed=42))
+    ansi = console.export_text(styles=True)
+
+    def rgb(hex_color: str) -> str:
+        return f"{int(hex_color[1:3], 16)};{int(hex_color[3:5], 16)};{int(hex_color[5:7], 16)}"
+
+    # Mindestens eine der Haupt-Polity-Farben faerbt Land ein.
+    tones = (ROSE_PINE_MOON.love, ROSE_PINE_MOON.gold, ROSE_PINE_MOON.iris, ROSE_PINE_MOON.rose)
+    assert any(rgb(t) in ansi for t in tones)
+
+
 # --- Aufgabe 2/4/8: Live & Replay laufen headless (Schnappschuss-Modus) -------
 
-def test_live_and_replay_run_without_terminal() -> None:
-    """Ohne TTY drucken Live und Replay Schnappschuss-Frames — schnell, ohne Sleep."""
+def test_replay_runs_without_terminal() -> None:
+    """Ohne TTY druckt Replay Schnappschuss-Frames — schnell, ohne Sleep."""
     world, log = simulate(seed=42, years=120)
     console = Console(force_terminal=False, width=100, record=True)
-    live_dashboard(world, log, DEFAULT_CONFIG, seed=42, show_map=False, console=console)
     replay(world, log, DEFAULT_CONFIG, seed=42, show_map=True, console=console)
     out = console.export_text()
-    assert "LIVE" in out and "REPLAY" in out
+    assert "REPLAY" in out
     assert "year" in out
+
+
+def test_watch_drives_the_world_without_terminal() -> None:
+    """watch treibt die Welt Jahr fuer Jahr; ohne TTY druckt es Schnappschuss-Frames."""
+    console = Console(force_terminal=False, width=120, record=True)
+    world, log = watch(42, 120, DEFAULT_CONFIG, speed=50, console=console)
+    out = console.export_text()
+    assert "WATCH" in out
+    assert "year" in out
+    assert "strongest polities" in out
+    assert "world map" in out  # die Karte ist eingebunden
+    # watch gibt den Endstand zurueck (fuer Fusszeile/Zusatzansichten).
+    assert world.year == 119
+    assert len(log) > 0
+
+
+def test_watch_drives_identically_to_simulate() -> None:
+    """weltlauf spiegelt simulate exakt: gleiche Welt UND gleiche EventIds (Kern unberuehrt)."""
+    from collections import deque
+
+    wa, la = simulate(seed=42, years=150)
+    letzte = deque(weltlauf(42, 150, DEFAULT_CONFIG), maxlen=1)
+    assert letzte  # der Lauf hat Jahre
+    world, log = letzte[0]
+    assert world == wa
+    assert tuple(log) == tuple(la)
 
 
 # --- static-Renderer: die schoen gegliederte Gesamt-Chronik -------------------
@@ -274,6 +323,47 @@ def test_static_and_watch_share_event_styling() -> None:
     war_line = ereignis_text(EventKind.KRIEG, "Year 5: A declared war on B.")
     assert "⚔" in war_line.plain
     assert "declared war on" in war_line.plain
+
+
+def test_event_colors_come_from_the_central_palette() -> None:
+    """Farbe aus EINER Quelle: jede Ereignisfarbe ist ein Ton der Rosé-Pine-Palette."""
+    from dataclasses import astuple
+
+    from worldsim.presentation import ROSE_PINE_MOON
+    from worldsim.presentation.visual import stil_fuer
+
+    palette_hexes = set(astuple(ROSE_PINE_MOON))
+    for kind in EventKind:
+        color, glyph, _ = stil_fuer(kind)
+        assert color in palette_hexes, (kind, color)  # kein hartkodierter Hex-Wert
+        assert glyph
+
+
+def test_factor_and_cause_components_render_readably() -> None:
+    """Dominante Faktoren erscheinen als ``label: gewicht``; Ursachen als ``↳ …``."""
+    from worldsim.presentation import faktoren_text, kausal_zeile
+
+    faktoren = faktoren_text([("Machtwechsel", 1.3), ("Furcht", -0.5)])
+    assert "Machtwechsel: +1.3" in faktoren.plain
+    assert "Furcht: -0.5" in faktoren.plain
+
+    cause = kausal_zeile("Year 3: a plague struck Oreisa.")
+    assert cause.plain.strip().startswith("↳")
+    assert "a plague struck Oreisa" in cause.plain
+
+
+def test_static_shows_indented_why_note_for_turning_points() -> None:
+    """Unter Wendepunkten steht eingerueckt die dezente Warum-Kette (Faktoren + Ursache)."""
+    from worldsim.presentation import render_chronik
+
+    world, log = simulate(seed=42, years=150)
+    console = Console(force_terminal=False, width=100, record=True)
+    render_chronik(world, log, DEFAULT_CONFIG, seed=42, years=150, console=console)
+    out = console.export_text()
+
+    assert "a turning point" in out
+    # Die Warum-Kette ist eingerueckt und verweist mit ↳ auf ein frueheres Ereignis.
+    assert "↳ Year" in out
 
 
 # --- Invariante: der headless Kern bleibt abhaengigkeitsfrei ------------------

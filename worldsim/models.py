@@ -142,6 +142,10 @@ class Region:
     # Adjazenz/Distanz fuer Handel & Krieg = Grenzen.
     nachbarn: tuple[EntityId, ...] = ()
     owner: EntityId | None = None
+    # Rein geografische Lage in [0,1)^2 fuer die Karten-Darstellung (aus dem
+    # worldgen-Sub-Strom, Teil des Determinismus-Vertrags). Die Simulation liest
+    # sie NICHT — Verhalten kommt aus Adjazenz und Traits, nie aus der Lage.
+    coord: tuple[float, float] = (0.0, 0.0)
 
 
 @dataclass

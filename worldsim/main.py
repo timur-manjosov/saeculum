@@ -65,10 +65,10 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help="'Warum?'-Kette zu einem konkreten Event (Event-id).",
     )
     extras.add_argument(
-        "--speed", type=float, default=6.0, help="Replay-Tempo (Jahre pro Sekunde grob)."
-    )
-    extras.add_argument(
-        "--fps", type=float, default=6.0, help="Live-Bildrate (Jahre pro Sekunde)."
+        "--speed",
+        type=float,
+        default=8.0,
+        help="Tempo von watch/replay in Jahren pro Sekunde (zur Laufzeit per +/- anpassbar).",
     )
     extras.add_argument(
         "--no-map",
@@ -179,26 +179,28 @@ def _run_extras(args: argparse.Namespace, world: World, log: EventLog, cfg: Conf
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Einstiegspunkt der CLI. Simuliert und zeigt Chronik, Live-Ansicht oder Replay."""
+    """Einstiegspunkt der CLI. Zeigt Chronik (static), Live-Ansicht (watch) oder Replay."""
     args = _parse_args(argv)
     cfg = DEFAULT_CONFIG
-    world, log = simulate(seed=args.seed, years=args.years)
 
     try:
-        from worldsim.presentation import live_dashboard, render_chronik, replay
+        from worldsim.presentation import render_chronik, replay, watch
     except ImportError:  # pragma: no cover - Hinweis, wenn die Extras fehlen
         print(
             "presentation requires the extras — install with:  pip install '.[presentation]'"
         )
         return 1
 
-    if args.mode == "static":
-        render_chronik(world, log, cfg, seed=args.seed, years=args.years)
-        _print_explanations(world, log, args)
-    elif args.mode == "watch":
-        live_dashboard(world, log, cfg, seed=args.seed, fps=args.fps, show_map=args.show_map)
-    else:  # replay
-        replay(world, log, cfg, seed=args.seed, speed=args.speed, show_map=args.show_map)
+    if args.mode == "watch":
+        # watch treibt die Simulation selbst Jahr fuer Jahr und liefert den Endstand.
+        world, log = watch(args.seed, args.years, cfg, speed=args.speed, show_map=args.show_map)
+    else:
+        world, log = simulate(seed=args.seed, years=args.years)
+        if args.mode == "static":
+            render_chronik(world, log, cfg, seed=args.seed, years=args.years)
+            _print_explanations(world, log, args)
+        else:  # replay
+            replay(world, log, cfg, seed=args.seed, speed=args.speed, show_map=args.show_map)
 
     _run_extras(args, world, log, cfg)
     print(_share_footer(args, world, log, cfg))

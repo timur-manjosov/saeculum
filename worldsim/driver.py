@@ -171,6 +171,11 @@ def worldgen(master: Rng, cfg: Config) -> World:
             identity_id=identity_ids[n % cfg.num_identities],
         )
 
+    # Geografische Lage zuletzt ziehen: so bleiben alle vorherigen semantischen
+    # Ziehungen (Kapazitaeten, Adjazenz, Hauptstaedte, Traits) unveraendert — der
+    # Lauf ist byte-identisch zu vorher, nur um Koordinaten reicher.
+    _place_regions(regions, gen)
+
     return World(
         year=0,
         regions=regions,
@@ -212,6 +217,17 @@ def _choose_capitals(
 ) -> list[EntityId]:
     """Waehle deterministisch verteilte Startfelder fuer die Nationen."""
     return gen.sample(sorted(regions), k=cfg.num_nations)
+
+
+def _place_regions(regions: dict[EntityId, Region], gen: Stream) -> None:
+    """Weise jeder Region eine geografische Koordinate in [0,1)^2 zu.
+
+    Aus dem worldgen-Sub-Strom (Determinismus-Vertrag), rein zur Verortung auf der
+    Karte. Keine Tile-Mikrosimulation, keine Geografie-Physik: die Lage beeinflusst
+    das Verhalten nicht — sie ist nur eine Ansicht ueber dem Adjazenzgraphen.
+    """
+    for rid in sorted(regions):
+        regions[rid].coord = (gen.random(), gen.random())
 
 
 def simulate(
