@@ -11,7 +11,17 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+# Praesentation (Phase 6): Farbe, Karte, Statistik. NUR fuer die
+# presentation-Schicht — der headless Kern bleibt abhaengigkeitsfrei.
+# Versionen gepinnt auf den getesteten Stand (reproduzierbare Praesentation).
+presentation = ["rich==15.0.0", "numpy==2.5.1", "opensimplex==0.4.5.1"]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.15.20",
+    "rich==15.0.0",
+    "numpy==2.5.1",
+    "opensimplex==0.4.5.1",
+]
 
 [project.scripts]
 worldsim = "worldsim.main:main"

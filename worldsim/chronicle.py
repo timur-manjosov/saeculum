@@ -28,6 +28,7 @@ __all__ = [
     "dominante_faktoren",
     "epochen",
     "erklaere",
+    "erzaehle",
     "folgen",
     "lebenslauf",
     "warum",
@@ -227,6 +228,15 @@ def chronik_mit_zeitaltern(world: World, log: EventLog, cfg: Config) -> list[str
             continue
         lines.append(_narrate(world, event, log))
     return lines
+
+
+def erzaehle(world: World, log: EventLog, event: Event) -> str:
+    """Oeffentliche, deterministische Ein-Zeilen-Narration eines Events.
+
+    Die Praesentations-Schicht (read-only) nutzt dieselbe Templating-Logik wie die
+    Chronik — Sprache entsteht ausschliesslich hier, nie im Event.
+    """
+    return _narrate(world, event, log)
 
 
 def _narrate(world: World, event: Event, log: EventLog) -> str:

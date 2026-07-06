@@ -57,3 +57,24 @@ def test_cli_main_runs(capsys) -> None:
 
     assert exit_code == 0
     assert "was founded in" in out
+
+
+def test_cli_seed_sharing_ux(capsys) -> None:
+    """Kopf- und Fusszeile nennen den Seed und den exakten Reproduktions-Befehl."""
+    exit_code = main(["--seed", "7", "--years", "60"])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "History Machine — seed 7, 60 years" in out
+    # Save = Seed: die Welt laesst sich durch Teilen genau dieses Befehls reproduzieren.
+    assert "share this world:  worldsim --seed 7 --years 60" in out
+
+
+def test_cli_replay_mode_runs_headless(capsys) -> None:
+    """--mode replay laeuft ohne TTY als Schnappschuss-Ansicht und endet sauber."""
+    exit_code = main(["--seed", "1", "--years", "40", "--mode", "replay", "--no-map"])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "REPLAY" in out
+    assert "share this world:" in out
