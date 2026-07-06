@@ -247,6 +247,35 @@ def test_live_and_replay_run_without_terminal() -> None:
     assert "year" in out
 
 
+# --- static-Renderer: die schoen gegliederte Gesamt-Chronik -------------------
+
+def test_static_renderer_prints_structured_chronicle() -> None:
+    """Der static-Renderer zeigt Titel, Zeitalter-Ueberschriften, Eintraege und Bilanz."""
+    from worldsim.presentation import render_chronik
+
+    world, log = simulate(seed=42, years=150)
+    console = Console(force_terminal=False, width=100, record=True)
+    render_chronik(world, log, DEFAULT_CONFIG, seed=42, years=150, console=console)
+    out = console.export_text()
+
+    assert "History Machine — seed 42, 150 years" in out  # Titel + Seed
+    assert "the First Expansion" in out  # erste Zeitalter-Ueberschrift
+    assert "the Age of" in out  # weitere, benannte Zeitalter
+    assert "was founded in" in out  # erzaehlte Eintraege
+    assert "the world at the end" in out  # Welt-Zusammenfassung
+    assert "greatest realm" in out and "formative figures" in out
+
+
+def test_static_and_watch_share_event_styling() -> None:
+    """static und watch nutzen denselben Baustein: gleiche Glyphe je Ereignisart."""
+    from worldsim.presentation.components import ereignis_text
+
+    # Krieg traegt die Kriegsglyphe in beiden Ansichten (gemeinsame Optik-Quelle).
+    war_line = ereignis_text(EventKind.KRIEG, "Year 5: A declared war on B.")
+    assert "⚔" in war_line.plain
+    assert "declared war on" in war_line.plain
+
+
 # --- Invariante: der headless Kern bleibt abhaengigkeitsfrei ------------------
 
 def test_core_imports_without_presentation_deps() -> None:

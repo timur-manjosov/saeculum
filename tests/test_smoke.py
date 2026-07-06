@@ -67,7 +67,7 @@ def test_cli_seed_sharing_ux(capsys) -> None:
     assert exit_code == 0
     assert "History Machine — seed 7, 60 years" in out
     # Save = Seed: die Welt laesst sich durch Teilen genau dieses Befehls reproduzieren.
-    assert "share this world:  worldsim --seed 7 --years 60" in out
+    assert "share this world:  saeculum --seed 7 --years 60" in out
 
 
 def test_cli_replay_mode_runs_headless(capsys) -> None:

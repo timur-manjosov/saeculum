@@ -24,6 +24,7 @@ dev = [
 ]
 
 [project.scripts]
+saeculum = "worldsim.main:main"
 worldsim = "worldsim.main:main"
 
 [tool.setuptools.packages.find]
