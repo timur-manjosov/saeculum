@@ -270,6 +270,20 @@ def test_replay_runs_without_terminal() -> None:
     assert "year" in out
 
 
+def test_replay_banners_age_transitions() -> None:
+    """Der Zeitraffer benennt das laufende Zeitalter und bannert Zeitalter-Wechsel."""
+    from worldsim.chronicle import epochen
+
+    world, log = simulate(seed=42, years=200)
+    ages = epochen(world, log)
+    console = Console(force_terminal=False, width=100, record=True)
+    replay(world, log, DEFAULT_CONFIG, seed=42, show_map=False, console=console)
+    out = console.export_text()
+    # Jahr 0 ist immer ein Schnappschuss ⇒ das eroeffnende Zeitalter samt Banner erscheint.
+    assert ages[0][1] in out  # "the First Expansion" (Kopfzeile + Banner)
+    assert "from year 0" in out  # die Banner-Beschriftung des Zeitalter-Wechsels
+
+
 def test_watch_drives_the_world_without_terminal() -> None:
     """watch treibt die Welt Jahr fuer Jahr; ohne TTY druckt es Schnappschuss-Frames."""
     console = Console(force_terminal=False, width=120, record=True)
@@ -294,6 +308,67 @@ def test_watch_drives_identically_to_simulate() -> None:
     world, log = letzte[0]
     assert world == wa
     assert tuple(log) == tuple(la)
+
+
+# --- Aufgabe 5/7: interaktive Erkundung des Kausalgraphen (explore) ------------
+
+def test_explore_traces_collapse_and_zooms_into_causes() -> None:
+    """„Warum ist Polity X zerfallen?" — die Kette samt Faktoren, dann in die Ursache zoomen."""
+    import re
+
+    from worldsim.chronicle import erzaehle
+    from worldsim.presentation import explore
+    from worldsim.presentation.query import finde_kollaps
+
+    world, log = simulate(seed=42, years=200)
+    target = next(p for p in world.polities.values() if finde_kollaps(log, p.id) is not None)
+    collapse = finde_kollaps(log, target.id)
+    assert collapse is not None
+    causes = sorted(log.get(collapse).causes)
+
+    cmds = [f"why {target.name}"] + ([f"into {causes[0]}"] if causes else [])
+    console = Console(force_terminal=False, width=100, record=True)
+    explore(world, log, DEFAULT_CONFIG, seed=42, console=console, commands=cmds)
+    out = console.export_text()
+    flat = " ".join(out.split())  # robust gegen Zeilenumbruch im Baum
+
+    assert "EXPLORE" in flat
+    assert f"why did {target.name} suffer" in flat
+    # Der Kopf der Kette ist exakt die Chronik-Narration des Rueckschlags (nur abgeleitet).
+    assert " ".join(erzaehle(world, log, log.get(collapse)).split()) in flat
+    # Jede Baumzeile traegt ihre dominanten Faktoren: ``label: +/-gewicht``.
+    assert re.search(r"\w: [+-]\d", flat)
+    assert f"#{collapse}" in flat  # Event-ids sind sichtbar (navigierbar)
+
+
+def test_explore_shows_entity_biography() -> None:
+    """Eine Entitaet waehlen ⇒ ihr Lebenslauf (alle Events mit ihr im Subjekt)."""
+    from worldsim.presentation import explore
+
+    world, log = simulate(seed=42, years=120)
+    target = max(world.polities.values(), key=lambda p: len(p.territory))
+    console = Console(force_terminal=False, width=100, record=True)
+    explore(world, log, DEFAULT_CONFIG, seed=42, console=console, commands=[f"who {target.name}"])
+    out = console.export_text()
+
+    assert f"life of {target.name}" in out
+    assert "was founded in" in out  # die Gruendung eroeffnet jede Polity-Biographie
+
+
+def test_explore_headless_demo_is_derived_only() -> None:
+    """Ohne Kommandos laeuft die Beispiel-Sitzung; sie erfindet nichts (nur Log-Ableitung)."""
+    from worldsim.presentation import explore
+
+    world, log = simulate(seed=7, years=120)
+    console = Console(force_terminal=False, width=100, record=True)
+    explore(world, log, DEFAULT_CONFIG, seed=7, console=console)  # commands=None ⇒ Demo
+    out = console.export_text()
+
+    assert "EXPLORE" in out
+    # Unbekannte Eingaben werden abgewiesen, nicht halluziniert.
+    console2 = Console(force_terminal=False, width=100, record=True)
+    explore(world, log, DEFAULT_CONFIG, console=console2, commands=["who Nirgendwo", "why 99999"])
+    assert "unknown entity" in console2.export_text()
 
 
 # --- static-Renderer: die schoen gegliederte Gesamt-Chronik -------------------

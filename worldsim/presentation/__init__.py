@@ -15,11 +15,13 @@ Zwei Prinzipien tragen alles:
 from worldsim.presentation.components import (
     bilanz_tafel,
     ereignis_text,
+    faktoren_inline,
     faktoren_text,
     feed_tafel,
     kausal_zeile,
     zeitalter_regel,
 )
+from worldsim.presentation.explore import explore
 from worldsim.presentation.palette import ROSE_PINE_MOON, Palette
 from worldsim.presentation.query import warum_entitaet, warum_event
 from worldsim.presentation.render import Steuerung, replay
@@ -54,6 +56,8 @@ __all__ = [
     "ereignis_text",
     "ereignisse_pro_jahr",
     "event_to_visual",
+    "explore",
+    "faktoren_inline",
     "faktoren_text",
     "feed_tafel",
     "kausal_zeile",

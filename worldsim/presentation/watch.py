@@ -34,7 +34,7 @@ from worldsim.config import DEFAULT_CONFIG, Config
 from worldsim.driver import SYSTEMS, worldgen
 from worldsim.events import EventKind, EventLog
 from worldsim.models import World
-from worldsim.presentation.components import feed_tafel
+from worldsim.presentation.components import balken, feed_tafel
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.render import Steuerung, _pump, _snapshot_years
 from worldsim.presentation.worldmap import render_map
@@ -44,7 +44,6 @@ __all__ = ["watch", "weltlauf"]
 
 _FEED = 10  # Zeilen im streamenden Ereignis-Feed
 _TOP = 7  # angezeigte Top-Polities
-_BAR_WIDTH = 9  # Breite der kompakten Balken
 
 
 def weltlauf(
@@ -71,16 +70,6 @@ def weltlauf(
         yield world, log
 
 
-def _bar(value: float, maximum: float, *, color: str) -> Text:
-    """Ein kompakter Balken (gefuellte/leere Bloecke) fuer einen Kennwert."""
-    frac = 0.0 if maximum <= 0 else max(0.0, min(1.0, value / maximum))
-    filled = round(frac * _BAR_WIDTH)
-    bar = Text()
-    bar.append("█" * filled, style=color)
-    bar.append("░" * (_BAR_WIDTH - filled), style=P.overlay)
-    return bar
-
-
 def _polity_tafel(world: World) -> Table:
     """Die staerksten Polities: Groesse/Legitimitaet/Wohlstand als kompakte Balken."""
     alle = world.polities.values()
@@ -103,9 +92,9 @@ def _polity_tafel(world: World) -> Table:
         faith = world.identities.get(p.identity_id) if p.identity_id is not None else None
         table.add_row(
             p.name,
-            _bar(len(p.territory), max_land, color=P.pine),
-            _bar(legit, 1.0, color=P.iris),
-            _bar(p.stockpiles.wohlstand, max_wealth, color=P.gold),
+            balken(len(p.territory), max_land, color=P.pine),
+            balken(legit, 1.0, color=P.iris),
+            balken(p.stockpiles.wohlstand, max_wealth, color=P.gold),
             f"{p.population:,}",
             faith.name if faith else "—",
         )

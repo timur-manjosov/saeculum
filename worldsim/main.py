@@ -38,9 +38,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--years", type=int, default=200, help="Zu simulierende Jahre.")
     parser.add_argument(
         "--mode",
-        choices=("static", "watch", "replay"),
+        choices=("static", "watch", "replay", "explore"),
         default="static",
-        help="static: gegliederte Chronik (Default) · watch: Live-Dashboard · replay: Zeitraffer.",
+        help=(
+            "static: gegliederte Chronik (Default) · watch: Live-Dashboard · "
+            "replay: Zeitraffer · explore: interaktive Kausalgraph-Erkundung."
+        ),
     )
     # --- ergaenzende Ansichten (zusaetzlich zum Modus) --------------------
     extras = parser.add_argument_group("additional views")
@@ -184,7 +187,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     cfg = DEFAULT_CONFIG
 
     try:
-        from worldsim.presentation import render_chronik, replay, watch
+        from worldsim.presentation import explore, render_chronik, replay, watch
     except ImportError:  # pragma: no cover - Hinweis, wenn die Extras fehlen
         print(
             "presentation requires the extras — install with:  pip install '.[presentation]'"
@@ -199,6 +202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.mode == "static":
             render_chronik(world, log, cfg, seed=args.seed, years=args.years)
             _print_explanations(world, log, args)
+        elif args.mode == "explore":
+            explore(world, log, cfg, seed=args.seed)
         else:  # replay
             replay(world, log, cfg, seed=args.seed, speed=args.speed, show_map=args.show_map)
 

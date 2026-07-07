@@ -26,11 +26,12 @@ from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
-from worldsim.chronicle import erzaehle
+from worldsim.chronicle import epochen, erzaehle
 from worldsim.config import Config
 from worldsim.events import Event, EventKind, EventLog
 from worldsim.models import World
-from worldsim.presentation.components import feed_tafel
+from worldsim.presentation.components import balken, feed_tafel, zeitalter_regel
+from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.visual import ViewState
 from worldsim.presentation.worldmap import render_map
 
@@ -71,22 +72,47 @@ def _events_by_year(log: EventLog) -> dict[int, list[Event]]:
     return grouped
 
 
+def _age_at(ages: list[tuple[int, str]], year: int) -> tuple[str, bool]:
+    """Der bis ``year`` geltende Zeitalter-Name und ob ``year`` ein Zeitalter eroeffnet.
+
+    ``ages`` sind die ``(Startjahr, Name)``-Grenzen aus ``chronicle.epochen`` — rein
+    aus dem Log, ohne Re-Simulation. Am Startjahr eines Zeitalters zeigt der Replay
+    ein Banner (``boundary``); dazwischen traegt die Kopfzeile den laufenden Namen.
+    """
+    name = ages[0][1] if ages else "—"
+    boundary = False
+    for start, aname in ages:
+        if start <= year:
+            name = aname
+        if start == year:
+            boundary = True
+    return name, boundary
+
+
 def _top_table(world: World, view: ViewState) -> Table:
     """Rangtabelle der maechtigsten Nationen aus dem rekonstruierten Besitz."""
     counts = view.territory_counts()
     ranked = sorted(counts.items(), key=lambda kv: (kv[1], -kv[0]), reverse=True)[:_TOP]
-    table = Table(box=None, pad_edge=False, expand=False)
-    table.add_column("nation", style="bold")
-    table.add_column("land", justify="right")
-    table.add_column("pop", justify="right")
-    table.add_column("faith")
+    max_land = max((c for _, c in ranked), default=1)
+    table = Table(box=None, pad_edge=False, expand=False, header_style=P.subtle)
+    table.add_column("nation", style=f"bold {P.text}")
+    table.add_column("size")
+    table.add_column("land", justify="right", style=P.subtle)
+    table.add_column("people", justify="right", style=P.subtle)
+    table.add_column("creed", style=P.iris)
     for pid, count in ranked:
         pol = world.polities.get(pid)
         name = pol.name if pol else f"#{pid}"
         pop = view.population.get(pid, pol.population if pol else 0)
         faith_id = view.faith.get(pid, pol.identity_id if pol else None)
         faith = world.identities.get(faith_id) if faith_id else None
-        table.add_row(name, str(count), str(pop), faith.name if faith else "?")
+        table.add_row(
+            name,
+            balken(count, max_land, color=P.pine),
+            f"{count}",
+            f"{pop:,}",
+            faith.name if faith else "—",
+        )
     return table
 
 
@@ -101,18 +127,25 @@ def _frame(
     title: str,
     ctrl: Steuerung,
     show_map: bool,
+    ages: list[tuple[int, str]],
 ) -> RenderableType:
-    """Setze einen vollstaendigen Frame zusammen (Kopf, Karte, Top-Nationen, Feed)."""
+    """Setze einen vollstaendigen Frame zusammen (Kopf, Banner, Karte, Nationen, Feed)."""
     status = "‖ paused" if ctrl.paused else f"▶ {ctrl.speed:.1f}×"  # noqa: RUF001
+    age_name, boundary = _age_at(ages, year)
     header = Text.assemble(
-        (f" {title} ", "bold white on dark_blue"),
-        ("  year ", "bold"),
-        (f"{year:>4}/{max_year}", "bright_white"),
-        ("   ", ""),
-        (status, "bright_yellow"),
-        (f"   nations {len(view.territory_counts())}", "cyan"),
+        (f" {title} ", f"bold {P.base} on {P.iris}"),
+        ("  year ", P.muted),
+        (f"{year:>4}/{max_year}", f"bold {P.text}"),
+        ("    ", ""),
+        (status, P.gold),
+        (f"    nations {len(view.territory_counts())}", P.pine),
+        ("    ", ""),
+        (age_name, P.foam),
     )
     body: list[RenderableType] = [header]
+    # Zeitalter-Wechsel: im Eroeffnungsjahr ein Banner quer ueber den Frame.
+    if boundary:
+        body.append(zeitalter_regel(age_name, year))
     if show_map:
         body.append(render_map(world, seed=seed, owners=dict(view.owner)))
     body.append(_top_table(world, view))
@@ -161,6 +194,7 @@ def _play(
     feed: deque[tuple[EventKind, str]] = deque(maxlen=_FEED)
     by_year = _events_by_year(log)
     max_year = max(by_year, default=0)
+    ages = epochen(world, log)  # Zeitalter-Grenzen (rein aus dem Log, kein Re-Sim)
     ctrl = Steuerung(speed=1.0)
 
     def advance(year: int) -> None:
@@ -179,7 +213,7 @@ def _play(
                 console.print(
                     _frame(
                         world, view, feed, seed=seed, year=year, max_year=max_year,
-                        title=title, ctrl=ctrl, show_map=show_map,
+                        title=title, ctrl=ctrl, show_map=show_map, ages=ages,
                     )
                 )
         return
@@ -191,7 +225,7 @@ def _play(
             live.update(
                 _frame(
                     world, view, feed, seed=seed, year=year, max_year=max_year,
-                    title=title, ctrl=ctrl, show_map=show_map,
+                    title=title, ctrl=ctrl, show_map=show_map, ages=ages,
                 )
             )
             if interactive:

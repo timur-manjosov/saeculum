@@ -92,3 +92,13 @@ def test_cli_replay_mode_runs_headless(capsys) -> None:
     assert exit_code == 0
     assert "REPLAY" in out
     assert "share this world:" in out
+
+
+def test_cli_explore_mode_runs_headless(capsys) -> None:
+    """--mode explore laeuft ohne TTY als Beispiel-Sitzung und endet sauber."""
+    exit_code = main(["--seed", "42", "--years", "120", "--mode", "explore"])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "EXPLORE" in out
+    assert "share this world:" in out

@@ -30,13 +30,33 @@ from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.visual import stil_fuer
 
 __all__ = [
+    "balken",
     "bilanz_tafel",
     "ereignis_text",
+    "faktoren_inline",
     "faktoren_text",
     "feed_tafel",
     "kausal_zeile",
     "zeitalter_regel",
 ]
+
+_BAR_WIDTH = 9  # Standardbreite der kompakten Kennwert-Balken
+
+
+def balken(value: float, maximum: float, *, color: str, width: int = _BAR_WIDTH) -> Text:
+    """Ein kompakter Balken (gefuellte/leere Bloecke) fuer einen Kennwert.
+
+    Der geteilte Baustein hinter den Kennzahl-Balken: die Live-Ansicht (``watch``)
+    und der Zeitraffer (``replay``) zeichnen Groesse/Legitimitaet/Wohlstand mit
+    **demselben** Glyphensatz und derselben Palette (gefuellt in ``color``, der Rest
+    im gedaempften ``overlay``).
+    """
+    frac = 0.0 if maximum <= 0 else max(0.0, min(1.0, value / maximum))
+    filled = round(frac * width)
+    bar = Text()
+    bar.append("█" * filled, style=color)
+    bar.append("░" * (width - filled), style=P.overlay)
+    return bar
 
 
 def ereignis_text(kind: EventKind, text: str) -> Text:
@@ -60,18 +80,32 @@ def ereignis_text(kind: EventKind, text: str) -> Text:
     return line
 
 
-def faktoren_text(faktoren: Sequence[tuple[str, float]]) -> Text:
-    """Die dominanten Faktoren eines Ereignisses, eingerueckt und subtil: ``label: gewicht``.
+def faktoren_inline(faktoren: Sequence[tuple[str, float]]) -> Text:
+    """Die dominanten Faktoren als kompakte ``label: gewicht``-Kette (ohne Einrueckung).
 
-    Macht die Begruendung sichtbar (die Faktoren SIND die Begruendung), ohne die
-    Zeile zu ueberladen: Label gedimmt, Gewicht als leises Fettgewicht.
+    Der geteilte Baustein hinter jeder Begruendung: Label gedimmt, Gewicht als
+    leises Fettgewicht, mit gedaempftem Trenner. Die eingerueckte Chronik-Notiz
+    (``faktoren_text``) und die Warum-Baumzeilen (``explore``) setzen darauf auf —
+    die Faktoren SIND die Begruendung, ueberall gleich gesetzt.
     """
-    line = Text("      ")  # Einrueckung unter das Ereignis
+    line = Text()
     for i, (label, weight) in enumerate(faktoren):
         if i:
             line.append("   ·   ", style=P.overlay)
         line.append(f"{label}: ", style=P.muted)
         line.append(f"{weight:+.1f}", style=f"bold {P.subtle}")
+    return line
+
+
+def faktoren_text(faktoren: Sequence[tuple[str, float]]) -> Text:
+    """Die dominanten Faktoren eines Ereignisses, eingerueckt und subtil: ``label: gewicht``.
+
+    Macht die Begruendung sichtbar (die Faktoren SIND die Begruendung), ohne die
+    Zeile zu ueberladen — dieselbe Optik wie ``faktoren_inline``, nur unter das
+    Ereignis eingerueckt.
+    """
+    line = Text("      ")  # Einrueckung unter das Ereignis
+    line.append_text(faktoren_inline(faktoren))
     return line
 
 
