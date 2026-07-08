@@ -17,6 +17,7 @@ from worldsim.config import Config
 from worldsim.driver import simulate
 from worldsim.events import EventKind
 from worldsim.models import Polity, Stocks
+from worldsim.systems import bevoelkerung
 
 
 def test_stocks_is_frozen_pure_data() -> None:
@@ -60,7 +61,7 @@ def test_grain_surplus_drives_growth() -> None:
     world, log = simulate(seed=42, years=100, cfg=fertile)
     assert any(e.kind == EventKind.BEVOELKERUNG_MEILENSTEIN for e in log)
     # Bevoelkerung ist ueber den Anfangsstand hinaus gewachsen.
-    assert max(p.population for p in world.polities.values()) > fertile.initial_population
+    assert max(bevoelkerung(p) for p in world.polities.values()) > fertile.initial_population
 
 
 def test_grain_shortage_drives_famine() -> None:

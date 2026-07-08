@@ -39,6 +39,7 @@ from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.render import Steuerung, _pump, _snapshot_years
 from worldsim.presentation.worldmap import render_map
 from worldsim.rng import Rng
+from worldsim.systems import bevoelkerung
 
 __all__ = ["watch", "weltlauf"]
 
@@ -74,7 +75,7 @@ def _polity_tafel(world: World) -> Table:
     """Die staerksten Polities: Groesse/Legitimitaet/Wohlstand als kompakte Balken."""
     alle = world.polities.values()
     ranked = sorted(
-        alle, key=lambda p: (len(p.territory), p.population, -p.id), reverse=True
+        alle, key=lambda p: (len(p.territory), bevoelkerung(p), -p.id), reverse=True
     )[:_TOP]
     max_land = max((len(p.territory) for p in alle), default=1)
     max_wealth = max((p.stocks.gold for p in alle), default=1.0)
@@ -95,7 +96,7 @@ def _polity_tafel(world: World) -> Table:
             balken(len(p.territory), max_land, color=P.pine),
             balken(legit, 1.0, color=P.iris),
             balken(p.stocks.gold, max_wealth, color=P.gold),
-            f"{p.population:,}",
+            f"{bevoelkerung(p):,}",
             faith.name if faith else "—",
         )
     return table
@@ -103,7 +104,7 @@ def _polity_tafel(world: World) -> Table:
 
 def _header(world: World, *, year: int, max_year: int, paused: bool, tempo: float) -> Text:
     """Die Kopfzeile: Modus-Badge, Jahr, Status/Tempo und Kennzahlen."""
-    people = sum(p.population for p in world.polities.values())
+    people = sum(bevoelkerung(p) for p in world.polities.values())
     status = "‖ paused" if paused else f"▶ {tempo:.0f}/s"
     return Text.assemble(
         (" WATCH ", f"bold {P.base} on {P.iris}"),

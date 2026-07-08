@@ -25,6 +25,8 @@ __all__ = [
     "Ruler",
     "Settlement",
     "Stocks",
+    "Stratum",
+    "StratumKind",
     "Traits",
     "World",
 ]
@@ -138,6 +140,36 @@ class Stocks:
     gold: float = 0.0
 
 
+class StratumKind(StrEnum):
+    """Die drei behavioral unterschiedlichen Schichten einer Nation.
+
+    ARBEITER erzeugen Getreide und stellen Rekruten; SOLDAT traegt die abgeleitete
+    Schlagkraft; ELITE regiert und haelt einen ueberproportionalen Anteil am
+    Wohlstand. Genau drei Schichten (Reichtum vor Menge).
+    """
+
+    ARBEITER = "arbeiter"
+    SOLDAT = "soldat"
+    ELITE = "elite"
+
+
+@dataclass(frozen=True)
+class Stratum:
+    """Eine sozio-oekonomische Schicht als reiner, unveraenderlicher Wert.
+
+    ``size`` ist kontinuierlich (Float vermeidet Quantisierungs-Zyklen). ``grievance``
+    ist akkumulierter Unmut, der bei Getreidemangel und ungleichem ``wealth_share``
+    steigt und sonst langsam zerfaellt (die Groesse baut sich auf — Entladung erst
+    spaeter). ``wealth_share`` ist der Anteil am Wohlstand, den die Schicht haelt;
+    die Anteile aller Schichten einer Nation summieren zu ~1.
+    """
+
+    kind: StratumKind
+    size: float = 0.0
+    grievance: float = 0.0
+    wealth_share: float = 0.0
+
+
 @dataclass
 class Region:
     """Geographie als Verhaltenstraeger ("Feld"). Keine Tile-Mikrosimulation.
@@ -174,7 +206,7 @@ class Polity:
     """Herrschaftsverband ("Nation"), Knoten-Eigner im Territorialgraphen.
 
     Phase-1-Vereinfachung: Demografie und Bestaende liegen auf Nations-Ebene
-    (``population``, ``stocks``), nicht auf Siedlungs-Ebene. Die
+    (``strata``, ``stocks``), nicht auf Siedlungs-Ebene. Die
     Settlement-Schicht (und ``members``/``leader``) bleibt fuer spaetere Phasen
     reserviert.
     """
@@ -185,13 +217,15 @@ class Polity:
     # Beanspruchte Regionen (Felder) = das Territorium der Nation.
     territory: tuple[EntityId, ...] = ()
     founded_year: int = 0
-    population: int = 0
+    # Innere Struktur: die Schichten (Arbeiter/Soldat/Elite). Die Gesamt-
+    # bevoelkerung ist die Summe der ``size`` — kein eigenes Feld.
+    strata: tuple[Stratum, ...] = ()
     # Hoechststand der Bevoelkerung: damit jeder Meilenstein nur einmal feuert.
     peak_population: int = 0
     # Die drei handelbaren Bestaende (Getreide/Eisen/Gold).
     stocks: Stocks = field(default_factory=Stocks)
     # Transientes Tick-Signal: Getreidedefizit nach Verbrauch (>0 ⇒ Hunger).
-    # Reine Daten, von consumption gesetzt und von population gelesen.
+    # Reine Daten, von consumption gesetzt und von Demografie/Groll gelesen.
     food_deficit: float = 0.0
 
     # --- Phase 2: Charakter, Diplomatie, Konflikt --------------------------

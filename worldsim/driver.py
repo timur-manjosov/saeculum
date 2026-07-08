@@ -30,6 +30,7 @@ from worldsim.rng import Rng, Stream
 from worldsim.systems import (
     System,
     consumption,
+    demografie,
     diplomacy,
     disaster,
     epoch,
@@ -37,8 +38,9 @@ from worldsim.systems import (
     forge_ruler,
     founding,
     friction,
+    grievance,
     identity,
-    population,
+    initial_strata,
     production,
     research,
     ruler,
@@ -58,7 +60,10 @@ SYSTEMS: list[tuple[str, System]] = [
     ("research", research),
     ("production", production),
     ("consumption", consumption),
-    ("population", population),
+    # Demografie: Wachstum/Schrumpfung je Schicht + Rekrutierung; danach der Groll-
+    # Aufbau (liest das frische Nahrungsdefizit und die Wohlstandsanteile).
+    ("demografie", demografie),
+    ("grievance", grievance),
     ("expansion", expansion),
     ("friction", friction),
     ("diplomacy", diplomacy),
@@ -161,7 +166,7 @@ def worldgen(master: Rng, cfg: Config) -> World:
             capital=capital,
             territory=(capital,),
             founded_year=0,
-            population=cfg.initial_population,
+            strata=initial_strata(cfg),
             peak_population=cfg.initial_population,
             stocks=Stocks(
                 getreide=cfg.initial_getreide,

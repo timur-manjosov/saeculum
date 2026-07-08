@@ -34,6 +34,7 @@ from worldsim.presentation.components import balken, feed_tafel, zeitalter_regel
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.visual import ViewState
 from worldsim.presentation.worldmap import render_map
+from worldsim.systems import bevoelkerung
 
 __all__ = ["Steuerung", "replay"]
 
@@ -103,7 +104,7 @@ def _top_table(world: World, view: ViewState) -> Table:
     for pid, count in ranked:
         pol = world.polities.get(pid)
         name = pol.name if pol else f"#{pid}"
-        pop = view.population.get(pid, pol.population if pol else 0)
+        pop = view.population.get(pid, bevoelkerung(pol) if pol else 0)
         faith_id = view.faith.get(pid, pol.identity_id if pol else None)
         faith = world.identities.get(faith_id) if faith_id else None
         table.add_row(

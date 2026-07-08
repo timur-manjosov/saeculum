@@ -46,6 +46,8 @@ from worldsim.models import (
     Polity,
     Ruler,
     Stocks,
+    Stratum,
+    StratumKind,
     World,
 )
 from worldsim.names import make_name
@@ -53,7 +55,9 @@ from worldsim.rng import Stream
 
 __all__ = [
     "System",
+    "bevoelkerung",
     "consumption",
+    "demografie",
     "diplomacy",
     "disaster",
     "epoch",
@@ -61,8 +65,9 @@ __all__ = [
     "forge_ruler",
     "founding",
     "friction",
+    "grievance",
     "identity",
-    "population",
+    "initial_strata",
     "production",
     "research",
     "ruler",
@@ -71,6 +76,53 @@ __all__ = [
 
 # Ein System ist eine reine Funktion mit fester Signatur.
 System = Callable[[World, Stream, Config, EventLog], World]
+
+
+# === Schichten: abgeleitete Bevoelkerung & Helfer ===========================
+
+def bevoelkerung(pol: Polity) -> int:
+    """Gesamtbevoelkerung = Summe der Schichtgroessen (abgeleitet, kein Feld).
+
+    Die eine Wahrheit ueber die Nations-Bevoelkerung, von Kern und Praesentation
+    gemeinsam genutzt — so bleibt "Bevoelkerung = Summe der strata.size" konsistent.
+    """
+    return int(sum(s.size for s in pol.strata))
+
+
+def initial_strata(cfg: Config) -> tuple[Stratum, ...]:
+    """Baue die Anfangs-Schichtung einer Nation aus der Config (feste Reihenfolge).
+
+    Kanonische Reihenfolge Arbeiter, Soldat, Elite — stabile Tuple-Positionen halten
+    Iteration und Float-Reihenfolge (und damit den Determinismus) fest.
+    """
+    pop = cfg.initial_population
+    return (
+        Stratum(
+            StratumKind.ARBEITER,
+            size=pop * cfg.initial_worker_fraction,
+            wealth_share=cfg.initial_worker_wealth,
+        ),
+        Stratum(
+            StratumKind.SOLDAT,
+            size=pop * cfg.initial_soldier_fraction,
+            wealth_share=cfg.initial_soldier_wealth,
+        ),
+        Stratum(
+            StratumKind.ELITE,
+            size=pop * cfg.initial_elite_fraction,
+            wealth_share=cfg.initial_elite_wealth,
+        ),
+    )
+
+
+def _stratum_size(pol: Polity, kind: StratumKind) -> float:
+    """Groesse einer Schicht (0.0, falls fehlend)."""
+    return next((s.size for s in pol.strata if s.kind == kind), 0.0)
+
+
+def _scaled_strata(strata: tuple[Stratum, ...], factor: float) -> tuple[Stratum, ...]:
+    """Skaliere jede Schichtgroesse (Verluste/Teilung); Anteile & Groll bleiben."""
+    return tuple(replace(s, size=max(0.0, s.size * factor)) for s in strata)
 
 
 # === Subsistenz & Demografie (Phase 1, an neue Signatur angepasst) ==========
@@ -134,10 +186,17 @@ def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
         harvest = rng.uniform(low, high)
         regions = len(pol.territory)
+        land = _land_capacity(world, pol, cfg)
+        # Arbeiter erzeugen das Getreide: Ausbeute ist das Minimum aus Land und Arbeit
+        # (Liebigsches Minimum). Genug Arbeiter ⇒ landbegrenzt (wie zuvor); fehlen sie
+        # (starke Militarisierung), sinkt die Ernte.
+        required = land * cfg.workers_per_capacity
+        workers = _stratum_size(pol, StratumKind.ARBEITER)
+        labor = min(1.0, workers / required) if required > 0.0 else 0.0
         s = pol.stocks
         pol.stocks = replace(
             s,
-            getreide=s.getreide + _land_capacity(world, pol, cfg) * harvest * efficiency,
+            getreide=s.getreide + land * harvest * efficiency * labor,
             eisen=s.eisen + regions * cfg.iron_per_region * efficiency,
             gold=s.gold + regions * cfg.gold_per_region * efficiency,
         )
@@ -148,7 +207,7 @@ def consumption(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     """Bevoelkerung isst Getreide; ueberschuessiger Vorrat verdirbt (gedeckelt)."""
     for pid in sorted(world.polities):
         pol = world.polities[pid]
-        need = pol.population * cfg.food_per_person
+        need = bevoelkerung(pol) * cfg.food_per_person
         getreide = pol.stocks.getreide
         if getreide >= need:
             getreide -= need
@@ -161,50 +220,130 @@ def consumption(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     return world
 
 
-def population(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Logistisches Wachstum zur Tragfaehigkeit; Hunger schrumpft die Bevoelkerung."""
+def demografie(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """Wachstum/Schrumpfung je Schicht, Rekrutierung Arbeiter→Soldat, Hungersnot.
+
+    Logistisches Wachstum gilt fuer die Gesamtbevoelkerung gegen die Tragfaehigkeit
+    des Landes und wird proportional auf die Schichten verteilt (die Zusammensetzung
+    bleibt, bis die Rekrutierung sie verschiebt). Getreidemangel toetet anteilig ueber
+    alle Schichten. Meilensteine feuern auf die abgeleitete Gesamtbevoelkerung.
+    """
     for pid in sorted(world.polities):
         pol = world.polities[pid]
-        before = pol.population
+        before = bevoelkerung(pol)
+        if before <= 0:
+            continue
 
         if pol.food_deficit > 0.0:
-            deaths = min(before, int(pol.food_deficit * cfg.famine_deaths_per_deficit))
-            if deaths > 0:
-                pol.population = before - deaths
-                log.append(
-                    EventDraft(
-                        year=world.year,
-                        kind=EventKind.HUNGERSNOT,
-                        subjects=(pid,),
-                        factors=(Factor(FactorLabel.NAHRUNGSDEFIZIT, pol.food_deficit),),
-                        effects=(Effect(pid, "population", before, pol.population),),
-                    )
-                )
+            _starve(world, pol, before, cfg, log)
             continue
 
-        efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
-        capacity = _land_capacity(world, pol, cfg) * efficiency / cfg.food_per_person
-        if capacity <= 0:
-            continue
-        growth = int(before * cfg.growth_rate * (1.0 - before / capacity))
-        if growth <= 0:
-            continue
-        after = before + growth
-        pol.population = after
+        _grow(world, pol, before, cfg, log)
+        _recruit(pol, cfg)
+    return world
 
-        crossed = [m for m in cfg.population_milestones if pol.peak_population < m <= after]
-        if after > pol.peak_population:
-            pol.peak_population = after
-        for _ in crossed:
-            log.append(
-                EventDraft(
-                    year=world.year,
-                    kind=EventKind.BEVOELKERUNG_MEILENSTEIN,
-                    subjects=(pid,),
-                    factors=(Factor(FactorLabel.BEVOELKERUNGSWACHSTUM, float(growth)),),
-                    effects=(Effect(pid, "population", before, after),),
-                )
+
+def _starve(
+    world: World, pol: Polity, before: int, cfg: Config, log: EventLog
+) -> None:
+    """Hungersnot: verteile die Toten anteilig ueber alle Schichten."""
+    deaths = min(before, int(pol.food_deficit * cfg.famine_deaths_per_deficit))
+    if deaths <= 0:
+        return
+    pol.strata = _scaled_strata(pol.strata, 1.0 - deaths / before)
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.HUNGERSNOT,
+            subjects=(pol.id,),
+            factors=(Factor(FactorLabel.NAHRUNGSDEFIZIT, pol.food_deficit),),
+            effects=(Effect(pol.id, "population", before, bevoelkerung(pol)),),
+        )
+    )
+
+
+def _grow(
+    world: World, pol: Polity, before: int, cfg: Config, log: EventLog
+) -> None:
+    """Logistisches Wachstum, proportional auf die Schichten verteilt; Meilensteine."""
+    efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
+    capacity = _land_capacity(world, pol, cfg) * efficiency / cfg.food_per_person
+    if capacity <= 0:
+        return
+    factor = cfg.growth_rate * (1.0 - before / capacity)
+    if factor <= 0.0:
+        return
+    pol.strata = tuple(replace(s, size=s.size * (1.0 + factor)) for s in pol.strata)
+    after = bevoelkerung(pol)
+    crossed = [m for m in cfg.population_milestones if pol.peak_population < m <= after]
+    if after > pol.peak_population:
+        pol.peak_population = after
+    for _ in crossed:
+        log.append(
+            EventDraft(
+                year=world.year,
+                kind=EventKind.BEVOELKERUNG_MEILENSTEIN,
+                subjects=(pol.id,),
+                factors=(Factor(FactorLabel.BEVOELKERUNGSWACHSTUM, float(after - before)),),
+                effects=(Effect(pol.id, "population", before, after),),
             )
+        )
+
+
+def _recruit(pol: Polity, cfg: Config) -> None:
+    """Verschiebe Arbeiter↔Soldat homoeostatisch zum angestrebten Soldaten-Anteil.
+
+    Ohne Zufall: der Bruchteil ``recruit_rate`` der Luecke zum Zielanteil wird je Jahr
+    geschlossen. Rekrutierung zieht Arbeiter aus der Getreideproduktion, Demobilisierung
+    gibt sie zurueck — die Guns-versus-Butter-Kopplung.
+    """
+    total = sum(s.size for s in pol.strata)
+    if total <= 0.0:
+        return
+    workers = _stratum_size(pol, StratumKind.ARBEITER)
+    soldiers = _stratum_size(pol, StratumKind.SOLDAT)
+    delta = cfg.recruit_rate * (cfg.target_soldier_fraction * total - soldiers)
+    # Nie mehr rekrutieren als Arbeiter da sind, nie mehr demobilisieren als Soldaten.
+    delta = min(delta, workers) if delta > 0.0 else -min(-delta, soldiers)
+    if delta == 0.0:
+        return
+    pol.strata = tuple(
+        replace(s, size=s.size - delta)
+        if s.kind == StratumKind.ARBEITER
+        else replace(s, size=s.size + delta)
+        if s.kind == StratumKind.SOLDAT
+        else s
+        for s in pol.strata
+    )
+
+
+def grievance(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """Baue den Groll je Schicht auf; zerfalle sonst langsam. KEINE Entladung.
+
+    Groll steigt bei Getreidemangel (Verelendung der unteren Schichten) und bei
+    ungleichem Wohlstandsanteil (haelt eine Schicht weniger als ihren Bevoelkerungs-
+    Anteil). Ohne Druck zerfaellt er Richtung 0. Nur die Groesse baut sich auf —
+    Aufstaende folgen mit Aenderung 6. Reine Zustandsfortschreibung, kein Event.
+    """
+    for pid in sorted(world.polities):
+        pol = world.polities[pid]
+        total = sum(s.size for s in pol.strata)
+        if total <= 0.0:
+            continue
+        need = total * cfg.food_per_person
+        hunger = min(1.0, pol.food_deficit / need) if need > 0.0 else 0.0
+        new_strata: list[Stratum] = []
+        for s in pol.strata:
+            pressure = 0.0
+            # Verelendung trifft die unteren Schichten (Arbeiter/Soldat), nicht die Elite.
+            if s.kind != StratumKind.ELITE:
+                pressure += cfg.grievance_hunger_rate * hunger
+            # Ungleichheit: haelt die Schicht weniger Wohlstand als ihren Groessen-Anteil?
+            shortfall = max(0.0, s.size / total - s.wealth_share)
+            pressure += cfg.grievance_inequality_rate * shortfall
+            g = s.grievance * (1.0 - cfg.grievance_decay) + pressure
+            new_strata.append(replace(s, grievance=min(cfg.grievance_cap, max(0.0, g))))
+        pol.strata = tuple(new_strata)
     return world
 
 
@@ -440,9 +579,9 @@ def _wage_war(
     winner, loser = (x, y) if margin >= 0.0 else (y, x)
     pw, pl = world.polities[winner], world.polities[loser]
 
-    loser_before = pl.population
-    pl.population = max(0, loser_before - int(loser_before * cfg.war_loser_losses))
-    pw.population = max(0, pw.population - int(pw.population * cfg.war_winner_losses))
+    loser_before = bevoelkerung(pl)
+    pl.strata = _scaled_strata(pl.strata, 1.0 - cfg.war_loser_losses)
+    pw.strata = _scaled_strata(pw.strata, 1.0 - cfg.war_winner_losses)
 
     effects: list[Effect] = []
     region = _contested_region(world, winner, loser)
@@ -451,7 +590,7 @@ def _wage_war(
         pl.territory = tuple(r for r in pl.territory if r != region)
         pw.territory = tuple(sorted((*pw.territory, region)))
         effects.append(Effect(region, "owner", loser, winner))
-    effects.append(Effect(loser, "population", loser_before, pl.population))
+    effects.append(Effect(loser, "population", loser_before, bevoelkerung(pl)))
 
     win_margin = (_power(pw, cfg) - _power(pl, cfg)) / cfg.power_reference
     subjects = (winner, loser, region) if region is not None else (winner, loser)
@@ -810,12 +949,14 @@ def _spawn_breakaway(
     for r in blob:
         world.regions[r].owner = new_pid
 
-    # Bevoelkerung und Bestaende anteilig nach Regionszahl aufteilen.
-    moved_pop = int(parent.population * k / total_regions)
-    pop_before = parent.population
-    parent.population = max(1, parent.population - moved_pop)
-    parent.peak_population = max(parent.peak_population, parent.population)
+    # Bevoelkerung (Schichten) und Bestaende anteilig nach Regionszahl aufteilen.
+    # Groll und Wohlstandsanteile sind intensiv und wandern unveraendert mit.
     share = k / total_regions
+    pop_before = bevoelkerung(parent)
+    moved_strata = _scaled_strata(parent.strata, share)
+    parent.strata = _scaled_strata(parent.strata, 1.0 - share)
+    parent.peak_population = max(parent.peak_population, bevoelkerung(parent))
+    moved_pop = int(sum(s.size for s in moved_strata))
     ps = parent.stocks
     moved = Stocks(
         getreide=ps.getreide * share,
@@ -836,7 +977,7 @@ def _spawn_breakaway(
         capital=new_capital,
         territory=tuple(sorted(blob)),
         founded_year=world.year,
-        population=max(1, moved_pop),
+        strata=moved_strata,
         peak_population=max(1, moved_pop),
         stocks=moved,
         # Kulturelle Kontinuitaet: gleiche Basis-Traits, abweichender Herrscher.
@@ -853,7 +994,7 @@ def _spawn_breakaway(
     world.polities[new_pid] = new_pol
 
     effects = [Effect(r, "owner", parent.id, new_pid) for r in sorted(blob)]
-    effects.append(Effect(parent.id, "population", pop_before, parent.population))
+    effects.append(Effect(parent.id, "population", pop_before, bevoelkerung(parent)))
     # Die Sukzession ist der strukturelle Ausloeser der Krise und wird stets als
     # Ursache verlinkt (Fragmentierung ← Sukzession ← Herrschertod), unabhaengig
     # davon, welcher Faktor die Entscheidung dominierte.
@@ -1046,7 +1187,7 @@ def research(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         pol = world.polities[pid]
         innovation = _effective_traits(world, pol).innovation
         rate = cfg.research_base_rate * innovation * (
-            1.0 + pol.population / cfg.research_pop_scale
+            1.0 + bevoelkerung(pol) / cfg.research_pop_scale
         )
         pol.knowledge += rate
         while (
@@ -1080,7 +1221,7 @@ def disaster(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     """
     for pid in sorted(world.polities):
         pol = world.polities[pid]
-        density = pol.population / cfg.plague_density_scale
+        density = bevoelkerung(pol) / cfg.plague_density_scale
         if rng.random() < cfg.plague_base_chance * (1.0 + density):
             _strike_plague(world, pid, rng, cfg, log, source=None)
         if rng.random() < cfg.quake_chance:
@@ -1100,11 +1241,11 @@ def _strike_plague(
 ) -> None:
     """Pest: Bevoelkerungsverlust; der Ausbruch kann auf einen Nachbarn ueberspringen."""
     pol = world.polities[pid]
-    before = pol.population
+    before = bevoelkerung(pol)
     loss = int(before * cfg.plague_pop_loss)
     if loss <= 0:
         return
-    pol.population = before - loss
+    pol.strata = _scaled_strata(pol.strata, 1.0 - cfg.plague_pop_loss)
     plague_id = log.append(
         EventDraft(
             year=world.year,
@@ -1112,7 +1253,7 @@ def _strike_plague(
             subjects=(pid,),
             factors=(Factor(FactorLabel.PEST, float(loss)),),
             causes=(source,) if source is not None else (),
-            effects=(Effect(pid, "population", before, pol.population),),
+            effects=(Effect(pid, "population", before, bevoelkerung(pol)),),
         )
     )
     # Nur der urspruengliche Ausbruch steckt weiter an (keine endlose Kaskade).
@@ -1128,12 +1269,12 @@ def _strike_quake(world: World, pid: EntityId, cfg: Config, log: EventLog) -> No
     """Erdbeben: zerstoert Wohlstand/Bevoelkerung und vernarbt die Hauptstadt-Kapazitaet."""
     pol = world.polities[pid]
     gold_before = pol.stocks.gold
-    pop_before = pol.population
+    pop_before = bevoelkerung(pol)
     pol.stocks = replace(pol.stocks, gold=gold_before * (1.0 - cfg.quake_wealth_loss))
-    pol.population = max(0, pop_before - int(pop_before * cfg.quake_pop_loss))
+    pol.strata = _scaled_strata(pol.strata, 1.0 - cfg.quake_pop_loss)
     effects = [
         Effect(pid, "gold", gold_before, pol.stocks.gold),
-        Effect(pid, "population", pop_before, pol.population),
+        Effect(pid, "population", pop_before, bevoelkerung(pol)),
     ]
     subjects: tuple[EntityId, ...] = (pid,)
     cap = pol.capital
@@ -1158,9 +1299,9 @@ def _strike_drought(world: World, pid: EntityId, cfg: Config, log: EventLog) -> 
     """Duerre: vernichtet den Nahrungsvorrat und kostet direkt Bevoelkerung."""
     pol = world.polities[pid]
     grain_before = pol.stocks.getreide
-    pop_before = pol.population
+    pop_before = bevoelkerung(pol)
     pol.stocks = replace(pol.stocks, getreide=0.0)
-    pol.population = max(0, pop_before - int(pop_before * cfg.drought_pop_loss))
+    pol.strata = _scaled_strata(pol.strata, 1.0 - cfg.drought_pop_loss)
     log.append(
         EventDraft(
             year=world.year,
@@ -1169,7 +1310,7 @@ def _strike_drought(world: World, pid: EntityId, cfg: Config, log: EventLog) -> 
             factors=(Factor(FactorLabel.DUERRE, grain_before),),
             effects=(
                 Effect(pid, "getreide", grain_before, 0.0),
-                Effect(pid, "population", pop_before, pol.population),
+                Effect(pid, "population", pop_before, bevoelkerung(pol)),
             ),
         )
     )
@@ -1549,12 +1690,22 @@ def _break_alliances(
 # === reine Helfer ===========================================================
 
 def _power(pol: Polity, cfg: Config) -> float:
-    """Schlagkraft aus Bevoelkerung, gehoben durch die erreichte Tech-Stufe.
+    """Schlagkraft, abgeleitet aus Soldaten, Eisen und Gold, gehoben durch Tech.
 
-    Technologie ist ein Multiplikator auf die rohe Masse: ein kleineres, aber
-    fortgeschritteneres Reich kann ein groesseres schlagen (Phase 5).
+    Soldaten sind die Basis; Eisen (Bewaffnung) und Gold (Sold) heben sie je bis zu
+    einem gedeckelten Bonus — genug Eisen/Gold, um alle Soldaten zu ruesten/besolden,
+    schoepft den Bonus voll aus. Ohne Soldaten keine Schlagkraft. Technologie bleibt
+    ein Multiplikator (ein kleineres, fortgeschritteneres Reich kann ein groesseres
+    schlagen). Konsistent mit "Schlagkraft ist abgeleitet".
     """
-    return float(pol.population) * (1.0 + pol.tech_level * cfg.tech_power_bonus)
+    soldiers = _stratum_size(pol, StratumKind.SOLDAT)
+    if soldiers <= 0.0:
+        return 0.0
+    armed = min(1.0, pol.stocks.eisen / (soldiers * cfg.iron_per_soldier))
+    paid = min(1.0, pol.stocks.gold / (soldiers * cfg.gold_per_soldier))
+    equipment = 1.0 + cfg.power_equip_bonus * armed + cfg.power_pay_bonus * paid
+    tech = 1.0 + pol.tech_level * cfg.tech_power_bonus
+    return soldiers * tech * equipment
 
 
 def _power_of(

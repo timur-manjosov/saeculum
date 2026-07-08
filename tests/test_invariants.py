@@ -9,7 +9,8 @@ from __future__ import annotations
 import pytest
 from worldsim.config import DEFAULT_CONFIG, Config
 from worldsim.driver import simulate
-from worldsim.models import World
+from worldsim.models import StratumKind, World
+from worldsim.systems import bevoelkerung
 
 
 def _assert_world_invariants(world: World, cfg: Config) -> None:
@@ -17,11 +18,23 @@ def _assert_world_invariants(world: World, cfg: Config) -> None:
 
     for pid, pol in world.polities.items():
         # Nicht-negative Bestaende (drei handelbare) und Forschungsfortschritt.
-        assert pol.population >= 0
+        assert bevoelkerung(pol) >= 0
         assert pol.stocks.getreide >= 0.0
         assert pol.stocks.eisen >= 0.0
         assert pol.stocks.gold >= 0.0
         assert pol.knowledge >= 0.0
+
+        # Schichtung: genau die drei Schichten in kanonischer Reihenfolge, Groessen
+        # >= 0, Groll im gueltigen Bereich, Wohlstandsanteile summieren zu ~1.
+        assert tuple(s.kind for s in pol.strata) == (
+            StratumKind.ARBEITER,
+            StratumKind.SOLDAT,
+            StratumKind.ELITE,
+        )
+        for s in pol.strata:
+            assert s.size >= 0.0
+            assert 0.0 <= s.grievance <= cfg.grievance_cap
+        assert abs(sum(s.wealth_share for s in pol.strata) - 1.0) < 1e-9
 
         # Gueltiges Territorium: existierende Regionen, korrekt zugeordnet.
         assert set(pol.territory) <= region_ids
@@ -96,4 +109,4 @@ def test_population_never_negative_under_heavy_famine() -> None:
     cfg = Config(famine_deaths_per_deficit=1000.0, harvest_variance=0.9)
     world, _ = simulate(seed=5, years=80, cfg=cfg)
     for pol in world.polities.values():
-        assert pol.population >= 0
+        assert bevoelkerung(pol) >= 0

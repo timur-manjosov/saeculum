@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 7
+    config_version: int = 8
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -37,9 +37,24 @@ class Config:
     initial_eisen: float = 0.0
     initial_gold: float = 0.0
 
+    # --- Schichtung: Anfangs-Zusammensetzung der Bevoelkerung --------------
+    # Groessen-Anteile der drei Schichten (Arbeiter/Soldat/Elite), summieren zu 1.
+    initial_worker_fraction: float = 0.75
+    initial_soldier_fraction: float = 0.10
+    initial_elite_fraction: float = 0.15
+    # Anfaengliche Wohlstandsanteile (summieren zu 1): die Elite haelt ueber-
+    # proportional viel — der eingebaute Keim des Volksdrucks (Verelendung).
+    initial_worker_wealth: float = 0.35
+    initial_soldier_wealth: float = 0.15
+    initial_elite_wealth: float = 0.50
+
     # --- production: Territorium erzeugt die drei Bestaende -----------------
     # Getreide: Region-Kapazitaet -> Ernte (mit jaehrlicher Schwankung).
     grain_per_capacity: float = 1.0
+    # Arbeiter erzeugen das Getreide: so viele Arbeiter voll auslasten eine Einheit
+    # Landkapazitaet. Fehlen Arbeiter (starke Militarisierung), sinkt die Ernte
+    # (Liebigsches Minimum) — die Guns-versus-Butter-Kopplung.
+    workers_per_capacity: float = 5.0
     # Einfache Foerderung je beanspruchter Region: Eisen (Waffen/Werkzeug) und
     # Gold (Schatz). Bewusst schlicht — die reiche Kopplung folgt in spaeteren
     # Aenderungen (Handel, Schichtung).
@@ -54,12 +69,28 @@ class Config:
     # Jahreskapazitaet begrenzt, damit schlechte Ernten Hunger ausloesen.
     food_storage_factor: float = 0.35
 
-    # --- population: logistisches Wachstum zur Tragfaehigkeit --------------
+    # --- Demografie: logistisches Wachstum je Schicht ----------------------
     growth_rate: float = 0.08
-    # Tote pro Einheit Nahrungsdefizit bei Hungersnot.
+    # Tote pro Einheit Nahrungsdefizit bei Hungersnot (verteilt auf alle Schichten).
     famine_deaths_per_deficit: float = 8.0
     # Aufsteigende Schwellen fuer Bevoelkerungs-Meilensteine.
     population_milestones: tuple[int, ...] = (300, 600, 1200, 2400, 5000)
+    # Rekrutierung Arbeiter -> Soldat: angestrebter Soldaten-Anteil und der Bruchteil
+    # der Luecke, der pro Jahr geschlossen wird (homoeostatisch, ohne Zufall). Krieg
+    # zehrt Soldaten, die Nachrekrutierung zieht Arbeiter aus der Getreideproduktion.
+    target_soldier_fraction: float = 0.10
+    recruit_rate: float = 0.10
+
+    # --- Groll (grievance): baut sich auf, entlaedt sich noch nicht --------
+    # Aufbau bei Getreidemangel (unter den unteren Schichten) und bei ungleichem
+    # Wohlstandsanteil (haelt eine Schicht weniger als ihren Bevoelkerungsanteil).
+    grievance_hunger_rate: float = 0.20
+    grievance_inequality_rate: float = 0.30
+    # Langsamer Zerfall Richtung 0, wenn kein Druck wirkt (Vergessen/Beschwichtigung).
+    grievance_decay: float = 0.05
+    # Obergrenze gegen Ausreisser (Kopfraum ueber dem Ungleichheits-Baseline, damit
+    # der Mangel-Beitrag sich klar abhebt).
+    grievance_cap: float = 8.0
 
     # --- expansion: Anspruch auf ein angrenzendes freies Feld --------------
     expand_gold_cost: float = 15.0
@@ -71,8 +102,15 @@ class Config:
     trust_drift: float = 0.02
     # Trust-Einbruch beim Angriff (Verrat); Honor des Opfers skaliert die Reaktion.
     trust_drop_on_attack: float = 0.6
-    # Bezugsgroesse, um Machtdifferenzen in Furcht/Vorteil zu normieren.
-    power_reference: float = 1500.0
+    # Bezugsgroesse, um Machtdifferenzen in Furcht/Vorteil zu normieren. Die
+    # Schlagkraft ruht jetzt auf Soldaten (statt roher Bevoelkerung), daher kleiner.
+    power_reference: float = 300.0
+    # Schlagkraft ist abgeleitet aus Soldaten, Eisen und Gold: Soldaten sind die
+    # Basis, Bewaffnung (Eisen) und Sold (Gold) heben sie je bis zu einem Bonus.
+    iron_per_soldier: float = 1.0
+    gold_per_soldier: float = 2.0
+    power_equip_bonus: float = 0.5
+    power_pay_bonus: float = 0.5
     # Obergrenze fuer die pro Tick berechnete Furcht (verhindert Ausreisser).
     fear_cap: float = 3.0
     # Beitrag eines Verbuendeten zur effektiven Macht (Balance of Power wirkt im

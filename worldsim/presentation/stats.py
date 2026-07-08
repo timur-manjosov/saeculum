@@ -14,6 +14,7 @@ from worldsim.config import Config
 from worldsim.events import EventKind, EventLog
 from worldsim.models import World
 from worldsim.presentation.visual import ViewState
+from worldsim.systems import bevoelkerung as gesamtbevoelkerung
 
 __all__ = [
     "bevoelkerung_verlauf",
@@ -105,7 +106,7 @@ def zusammenfassung_zeilen(world: World, log: EventLog, cfg: Config, years: int)
 
     top = sorted(
         world.polities.values(),
-        key=lambda p: (len(p.territory), p.population),
+        key=lambda p: (len(p.territory), gesamtbevoelkerung(p)),
         reverse=True,
     )[:5]
 
@@ -122,6 +123,6 @@ def zusammenfassung_zeilen(world: World, log: EventLog, cfg: Config, years: int)
         faith_name = faith.name if faith else "?"
         lines.append(
             f"    {pol.name:<12} territory {len(pol.territory):>2}  "
-            f"pop {pol.population:>5}  tech {pol.tech_level}  faith {faith_name}"
+            f"pop {gesamtbevoelkerung(pol):>5}  tech {pol.tech_level}  faith {faith_name}"
         )
     return lines

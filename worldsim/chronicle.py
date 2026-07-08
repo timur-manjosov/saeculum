@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from worldsim.config import Config
 from worldsim.events import Effect, Event, EventId, EventKind, EventLog, Factor, FactorLabel
 from worldsim.models import EntityId, World
+from worldsim.systems import bevoelkerung
 
 __all__ = [
     "ChronikEintrag",
@@ -337,11 +338,11 @@ def weltbilanz(world: World, log: EventLog, *, max_figuren: int = 5) -> Weltbila
     if world.polities:
         largest = max(
             world.polities.values(),
-            key=lambda p: (len(p.territory), p.population, -p.id),
+            key=lambda p: (len(p.territory), bevoelkerung(p), -p.id),
         )
         largest_name = largest.name
         largest_terr = len(largest.territory)
-        largest_pop = largest.population
+        largest_pop = bevoelkerung(largest)
     else:  # pragma: no cover - eine Welt hat immer Nationen
         largest_name, largest_terr, largest_pop = "—", 0, 0
 
