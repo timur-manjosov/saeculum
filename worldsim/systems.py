@@ -24,6 +24,7 @@ unveraendert am resultierenden Event. Rein mechanische Neuberechnungen
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from worldsim.config import Config
 from worldsim.events import (
@@ -44,7 +45,7 @@ from worldsim.models import (
     NationTraits,
     Polity,
     Ruler,
-    Stockpile,
+    Stocks,
     World,
 )
 from worldsim.names import make_name
@@ -120,34 +121,43 @@ def ruler(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
 
 
 def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Territorium erzeugt Ressourcen; die Nahrungsernte schwankt jaehrlich.
+    """Territorium erzeugt die drei Bestaende; die Getreideernte schwankt jaehrlich.
 
-    Die erreichte Tech-Stufe hebt die Effizienz (Phase 5): fortgeschrittene Reiche
-    ernten und erwirtschaften mehr aus demselben Land.
+    Getreide waechst mit der Nahrungskapazitaet des Territoriums (Ernteschwankung
+    ist die Hunger-Quelle); Eisen und Gold entstehen aus einfacher Foerderung je
+    Region. Die erreichte Tech-Stufe hebt die Effizienz (Phase 5): fortgeschrittene
+    Reiche holen mehr aus demselben Land.
     """
     low, high = 1.0 - cfg.harvest_variance, 1.0 + cfg.harvest_variance
     for pid in sorted(world.polities):
         pol = world.polities[pid]
         efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
         harvest = rng.uniform(low, high)
-        pol.stockpiles.nahrung += _land_capacity(world, pol, cfg) * harvest * efficiency
-        pol.stockpiles.wohlstand += len(pol.territory) * cfg.wealth_per_region * efficiency
+        regions = len(pol.territory)
+        s = pol.stocks
+        pol.stocks = replace(
+            s,
+            getreide=s.getreide + _land_capacity(world, pol, cfg) * harvest * efficiency,
+            eisen=s.eisen + regions * cfg.iron_per_region * efficiency,
+            gold=s.gold + regions * cfg.gold_per_region * efficiency,
+        )
     return world
 
 
 def consumption(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Bevoelkerung verbraucht Nahrung; ueberschuessiger Vorrat verdirbt (gedeckelt)."""
+    """Bevoelkerung isst Getreide; ueberschuessiger Vorrat verdirbt (gedeckelt)."""
     for pid in sorted(world.polities):
         pol = world.polities[pid]
         need = pol.population * cfg.food_per_person
-        if pol.stockpiles.nahrung >= need:
-            pol.stockpiles.nahrung -= need
+        getreide = pol.stocks.getreide
+        if getreide >= need:
+            getreide -= need
             pol.food_deficit = 0.0
         else:
-            pol.food_deficit = need - pol.stockpiles.nahrung
-            pol.stockpiles.nahrung = 0.0
+            pol.food_deficit = need - getreide
+            getreide = 0.0
         storage_cap = cfg.food_storage_factor * _land_capacity(world, pol, cfg)
-        pol.stockpiles.nahrung = min(pol.stockpiles.nahrung, storage_cap)
+        pol.stocks = replace(pol.stocks, getreide=min(getreide, storage_cap))
     return world
 
 
@@ -204,7 +214,7 @@ def expansion(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         pol = world.polities[pid]
         if pol.food_deficit > 0.0:
             continue
-        affordable = pol.stockpiles.wohlstand - cfg.expand_wealth_cost
+        affordable = pol.stocks.gold - cfg.expand_gold_cost
         if affordable < 0.0:
             continue
         target = _free_neighbor(world, pol)
@@ -212,17 +222,17 @@ def expansion(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
             continue
 
         capacity = _land_capacity(world, pol, cfg)
-        surplus = pol.stockpiles.nahrung / capacity if capacity > 0 else 0.0
+        surplus = pol.stocks.getreide / capacity if capacity > 0 else 0.0
         traits = _effective_traits(world, pol)
         decision = Decision()
         decision.add(FactorLabel.EXPANSIONSDRANG, traits.expansion)
         decision.add(FactorLabel.NAHRUNGSUEBERSCHUSS, surplus)
-        decision.add(FactorLabel.WOHLSTAND, min(affordable / cfg.expand_wealth_cost, 1.0))
+        decision.add(FactorLabel.WOHLSTAND, min(affordable / cfg.expand_gold_cost, 1.0))
         decision.add(FactorLabel.VORSICHT, -traits.caution * 0.5)
         if not decision.passes(cfg.expand_threshold):
             continue
 
-        pol.stockpiles.wohlstand -= cfg.expand_wealth_cost
+        pol.stocks = replace(pol.stocks, gold=pol.stocks.gold - cfg.expand_gold_cost)
         world.regions[target].owner = pid
         pol.territory = tuple(sorted((*pol.territory, target)))
         log.append(
@@ -800,15 +810,24 @@ def _spawn_breakaway(
     for r in blob:
         world.regions[r].owner = new_pid
 
-    # Bevoelkerung und Lager anteilig nach Regionszahl aufteilen.
+    # Bevoelkerung und Bestaende anteilig nach Regionszahl aufteilen.
     moved_pop = int(parent.population * k / total_regions)
     pop_before = parent.population
     parent.population = max(1, parent.population - moved_pop)
     parent.peak_population = max(parent.peak_population, parent.population)
-    moved_food = parent.stockpiles.nahrung * k / total_regions
-    moved_wealth = parent.stockpiles.wohlstand * k / total_regions
-    parent.stockpiles.nahrung -= moved_food
-    parent.stockpiles.wohlstand -= moved_wealth
+    share = k / total_regions
+    ps = parent.stocks
+    moved = Stocks(
+        getreide=ps.getreide * share,
+        eisen=ps.eisen * share,
+        gold=ps.gold * share,
+    )
+    parent.stocks = replace(
+        ps,
+        getreide=ps.getreide - moved.getreide,
+        eisen=ps.eisen - moved.eisen,
+        gold=ps.gold - moved.gold,
+    )
     parent.territory = tuple(sorted(r for r in parent.territory if r not in blob_set))
 
     new_pol = Polity(
@@ -819,7 +838,7 @@ def _spawn_breakaway(
         founded_year=world.year,
         population=max(1, moved_pop),
         peak_population=max(1, moved_pop),
-        stockpiles=Stockpile(nahrung=moved_food, wohlstand=moved_wealth),
+        stocks=moved,
         # Kulturelle Kontinuitaet: gleiche Basis-Traits, abweichender Herrscher.
         traits=parent.traits,
         leader=new_ruler.id,
@@ -1029,10 +1048,10 @@ def research(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         rate = cfg.research_base_rate * innovation * (
             1.0 + pol.population / cfg.research_pop_scale
         )
-        pol.stockpiles.wissen += rate
+        pol.knowledge += rate
         while (
             pol.tech_level < len(cfg.tech_thresholds)
-            and pol.stockpiles.wissen >= cfg.tech_thresholds[pol.tech_level]
+            and pol.knowledge >= cfg.tech_thresholds[pol.tech_level]
         ):
             before = pol.tech_level
             pol.tech_level += 1
@@ -1041,7 +1060,7 @@ def research(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
                     year=world.year,
                     kind=EventKind.INNOVATION,
                     subjects=(pid,),
-                    factors=(Factor(FactorLabel.FORSCHUNG, pol.stockpiles.wissen),),
+                    factors=(Factor(FactorLabel.FORSCHUNG, pol.knowledge),),
                     effects=(
                         Effect(pid, "tech_level", before, pol.tech_level),
                         Effect(pid, "tech_age", None, cfg.tech_age_names[before]),
@@ -1108,12 +1127,12 @@ def _strike_plague(
 def _strike_quake(world: World, pid: EntityId, cfg: Config, log: EventLog) -> None:
     """Erdbeben: zerstoert Wohlstand/Bevoelkerung und vernarbt die Hauptstadt-Kapazitaet."""
     pol = world.polities[pid]
-    wealth_before = pol.stockpiles.wohlstand
+    gold_before = pol.stocks.gold
     pop_before = pol.population
-    pol.stockpiles.wohlstand = wealth_before * (1.0 - cfg.quake_wealth_loss)
+    pol.stocks = replace(pol.stocks, gold=gold_before * (1.0 - cfg.quake_wealth_loss))
     pol.population = max(0, pop_before - int(pop_before * cfg.quake_pop_loss))
     effects = [
-        Effect(pid, "wohlstand", wealth_before, pol.stockpiles.wohlstand),
+        Effect(pid, "gold", gold_before, pol.stocks.gold),
         Effect(pid, "population", pop_before, pol.population),
     ]
     subjects: tuple[EntityId, ...] = (pid,)
@@ -1129,7 +1148,7 @@ def _strike_quake(world: World, pid: EntityId, cfg: Config, log: EventLog) -> No
             year=world.year,
             kind=EventKind.ERDBEBEN,
             subjects=subjects,
-            factors=(Factor(FactorLabel.ERDBEBEN, wealth_before * cfg.quake_wealth_loss),),
+            factors=(Factor(FactorLabel.ERDBEBEN, gold_before * cfg.quake_wealth_loss),),
             effects=tuple(effects),
         )
     )
@@ -1138,18 +1157,18 @@ def _strike_quake(world: World, pid: EntityId, cfg: Config, log: EventLog) -> No
 def _strike_drought(world: World, pid: EntityId, cfg: Config, log: EventLog) -> None:
     """Duerre: vernichtet den Nahrungsvorrat und kostet direkt Bevoelkerung."""
     pol = world.polities[pid]
-    food_before = pol.stockpiles.nahrung
+    grain_before = pol.stocks.getreide
     pop_before = pol.population
-    pol.stockpiles.nahrung = 0.0
+    pol.stocks = replace(pol.stocks, getreide=0.0)
     pol.population = max(0, pop_before - int(pop_before * cfg.drought_pop_loss))
     log.append(
         EventDraft(
             year=world.year,
             kind=EventKind.DUERRE,
             subjects=(pid,),
-            factors=(Factor(FactorLabel.DUERRE, food_before),),
+            factors=(Factor(FactorLabel.DUERRE, grain_before),),
             effects=(
-                Effect(pid, "nahrung", food_before, 0.0),
+                Effect(pid, "getreide", grain_before, 0.0),
                 Effect(pid, "population", pop_before, pol.population),
             ),
         )
@@ -1563,10 +1582,10 @@ def _effective_power(
 
 
 def _land_capacity(world: World, pol: Polity, cfg: Config) -> float:
-    """Mittlere Jahres-Nahrungskapazitaet des Territoriums (ohne Ernteschwankung)."""
+    """Mittlere Jahres-Getreidekapazitaet des Territoriums (ohne Ernteschwankung)."""
     return (
         sum(world.regions[r].food_capacity for r in sorted(pol.territory))
-        * cfg.food_per_capacity
+        * cfg.grain_per_capacity
     )
 
 

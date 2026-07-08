@@ -16,11 +16,12 @@ def _assert_world_invariants(world: World, cfg: Config) -> None:
     region_ids = set(world.regions)
 
     for pid, pol in world.polities.items():
-        # Nicht-negative Bestaende.
+        # Nicht-negative Bestaende (drei handelbare) und Forschungsfortschritt.
         assert pol.population >= 0
-        assert pol.stockpiles.nahrung >= 0.0
-        assert pol.stockpiles.wohlstand >= 0.0
-        assert pol.stockpiles.wissen >= 0.0
+        assert pol.stocks.getreide >= 0.0
+        assert pol.stocks.eisen >= 0.0
+        assert pol.stocks.gold >= 0.0
+        assert pol.knowledge >= 0.0
 
         # Gueltiges Territorium: existierende Regionen, korrekt zugeordnet.
         assert set(pol.territory) <= region_ids
@@ -77,7 +78,7 @@ def _assert_world_invariants(world: World, cfg: Config) -> None:
     # trotz Erdbeben-Narben eine positive Nahrungskapazitaet.
     for pol in world.polities.values():
         assert pol.tech_level >= 0
-        assert pol.stockpiles.wissen >= 0.0
+        assert pol.knowledge >= 0.0
         assert pol.peak_territory >= 0
     for region in world.regions.values():
         assert region.food_capacity > 0.0

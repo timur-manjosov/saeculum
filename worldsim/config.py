@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 6
+    config_version: int = 7
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -32,18 +32,25 @@ class Config:
     # Zusaetzliche Kanten ueber den verbindenden Ring hinaus (Grenzen).
     extra_edges: int = 16
     initial_population: int = 200
-    initial_nahrung: float = 80.0
-    initial_wohlstand: float = 0.0
+    # Anfangsbestaende (Getreide/Eisen/Gold) je Nation.
+    initial_getreide: float = 80.0
+    initial_eisen: float = 0.0
+    initial_gold: float = 0.0
 
-    # --- production: Territorium erzeugt Ressourcen ------------------------
-    food_per_capacity: float = 1.0
-    wealth_per_region: float = 2.0
+    # --- production: Territorium erzeugt die drei Bestaende -----------------
+    # Getreide: Region-Kapazitaet -> Ernte (mit jaehrlicher Schwankung).
+    grain_per_capacity: float = 1.0
+    # Einfache Foerderung je beanspruchter Region: Eisen (Waffen/Werkzeug) und
+    # Gold (Schatz). Bewusst schlicht — die reiche Kopplung folgt in spaeteren
+    # Aenderungen (Handel, Schichtung).
+    iron_per_region: float = 1.0
+    gold_per_region: float = 2.0
     # Jaehrliche Ernteschwankung: +/- Anteil um die Kapazitaet (Hunger-Quelle).
     harvest_variance: float = 0.30
 
-    # --- consumption: Bevoelkerung verbraucht Nahrung ----------------------
+    # --- consumption: Bevoelkerung isst Getreide ---------------------------
     food_per_person: float = 0.04
-    # Nahrung ist schlecht lagerbar: Vorrat ist auf diesen Bruchteil einer
+    # Getreide ist schlecht lagerbar: Vorrat ist auf diesen Bruchteil einer
     # Jahreskapazitaet begrenzt, damit schlechte Ernten Hunger ausloesen.
     food_storage_factor: float = 0.35
 
@@ -55,7 +62,7 @@ class Config:
     population_milestones: tuple[int, ...] = (300, 600, 1200, 2400, 5000)
 
     # --- expansion: Anspruch auf ein angrenzendes freies Feld --------------
-    expand_wealth_cost: float = 15.0
+    expand_gold_cost: float = 15.0
     # Entscheidungsschwelle fuer die (jetzt faktorbasierte) Expansionswahl.
     expand_threshold: float = 1.0
 

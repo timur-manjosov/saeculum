@@ -24,7 +24,7 @@ __all__ = [
     "Region",
     "Ruler",
     "Settlement",
-    "Stockpile",
+    "Stocks",
     "Traits",
     "World",
 ]
@@ -119,13 +119,23 @@ class Identity:
     parent: EntityId | None = None
 
 
-@dataclass
-class Stockpile:
-    """Lagerbestaende einer Siedlung. 3-6 behavioral unterschiedliche Typen."""
+@dataclass(frozen=True)
+class Stocks:
+    """Drei konkrete, handelbare Bestaende einer Nation (Stock-and-Flow).
 
-    nahrung: float = 0.0
-    wohlstand: float = 0.0
-    wissen: float = 0.0
+    ``getreide`` ernaehrt die Bevoelkerung (schlecht lagerbar), ``gold`` ist der
+    fiskalische Schatz (finanziert Expansion, zahlt spaeter Sold), ``eisen`` deckt
+    Waffen/Werkzeuge. Genau drei *behavioral* unterschiedliche Ressourcen statt
+    vieler kosmetischer Varianten (Reichtum vor Menge).
+
+    ``frozen``: ein Bestand ist reiner Wert; die Nation als Container bleibt mutabel
+    und schreibt ihn per ``dataclasses.replace`` fort — keine In-place-Mutation, aber
+    auch keine tiefe Kopie (drei Floats, bei ~10 Nationen ohne Overhead).
+    """
+
+    getreide: float = 0.0
+    eisen: float = 0.0
+    gold: float = 0.0
 
 
 @dataclass
@@ -156,7 +166,6 @@ class Settlement:
     region: EntityId | None = None
     polity: EntityId | None = None
     population: int = 0
-    stockpiles: Stockpile = field(default_factory=Stockpile)
     unrest: float = 0.0
 
 
@@ -164,8 +173,8 @@ class Settlement:
 class Polity:
     """Herrschaftsverband ("Nation"), Knoten-Eigner im Territorialgraphen.
 
-    Phase-1-Vereinfachung: Demografie und Lager liegen auf Nations-Ebene
-    (``population``, ``stockpiles``), nicht auf Siedlungs-Ebene. Die
+    Phase-1-Vereinfachung: Demografie und Bestaende liegen auf Nations-Ebene
+    (``population``, ``stocks``), nicht auf Siedlungs-Ebene. Die
     Settlement-Schicht (und ``members``/``leader``) bleibt fuer spaetere Phasen
     reserviert.
     """
@@ -179,8 +188,9 @@ class Polity:
     population: int = 0
     # Hoechststand der Bevoelkerung: damit jeder Meilenstein nur einmal feuert.
     peak_population: int = 0
-    stockpiles: Stockpile = field(default_factory=Stockpile)
-    # Transientes Tick-Signal: Nahrungsdefizit nach Verbrauch (>0 ⇒ Hunger).
+    # Die drei handelbaren Bestaende (Getreide/Eisen/Gold).
+    stocks: Stocks = field(default_factory=Stocks)
+    # Transientes Tick-Signal: Getreidedefizit nach Verbrauch (>0 ⇒ Hunger).
     # Reine Daten, von consumption gesetzt und von population gelesen.
     food_deficit: float = 0.0
 
@@ -209,15 +219,19 @@ class Polity:
     identity_id: EntityId | None = None
 
     # --- Phase 5: Technologie ----------------------------------------------
-    # Erreichte Tech-Stufe (0 = Anfang). Hebt Produktion und Schlagkraft; ihr
-    # Wissen (``stockpiles.wissen``) akkumuliert und schaltet an Schwellen
-    # Zeitalter frei. ``peak_territory`` speist die Kollaps-Erkennung (Phase 5).
+    # Erreichte Tech-Stufe (0 = Anfang). Hebt Produktion und Schlagkraft. Das
+    # ``knowledge`` (Forschungsfortschritt, kein handelbarer Bestand) akkumuliert
+    # und schaltet an Schwellen Zeitalter frei. ``peak_territory`` speist die
+    # Kollaps-Erkennung (Phase 5).
     tech_level: int = 0
+    knowledge: float = 0.0
     peak_territory: int = 0
 
     # --- fuer spaetere Phasen reserviert -----------------------------------
+    # Legitimitaet ist KEIN gespeicherter Bestand: sie wird bei Bedarf aus dem
+    # Zustand abgeleitet (Funktion der bewaeltigten Spannungen), konsistent mit
+    # "Schlagkraft ist abgeleitet" (siehe systems._power).
     members: tuple[EntityId, ...] = ()
-    legitimacy: float = 0.0
 
 
 @dataclass

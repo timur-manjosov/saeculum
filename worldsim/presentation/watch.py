@@ -77,7 +77,7 @@ def _polity_tafel(world: World) -> Table:
         alle, key=lambda p: (len(p.territory), p.population, -p.id), reverse=True
     )[:_TOP]
     max_land = max((len(p.territory) for p in alle), default=1)
-    max_wealth = max((p.stockpiles.wohlstand for p in alle), default=1.0)
+    max_wealth = max((p.stocks.gold for p in alle), default=1.0)
 
     table = Table(box=None, pad_edge=False, expand=False, header_style=P.subtle)
     table.add_column("polity", style=f"bold {P.text}")
@@ -94,7 +94,7 @@ def _polity_tafel(world: World) -> Table:
             p.name,
             balken(len(p.territory), max_land, color=P.pine),
             balken(legit, 1.0, color=P.iris),
-            balken(p.stockpiles.wohlstand, max_wealth, color=P.gold),
+            balken(p.stocks.gold, max_wealth, color=P.gold),
             f"{p.population:,}",
             faith.name if faith else "—",
         )

@@ -22,7 +22,7 @@ from worldsim.models import (
     Polity,
     Region,
     Ruler,
-    Stockpile,
+    Stocks,
     World,
 )
 from worldsim.names import make_name
@@ -163,8 +163,10 @@ def worldgen(master: Rng, cfg: Config) -> World:
             founded_year=0,
             population=cfg.initial_population,
             peak_population=cfg.initial_population,
-            stockpiles=Stockpile(
-                nahrung=cfg.initial_nahrung, wohlstand=cfg.initial_wohlstand
+            stocks=Stocks(
+                getreide=cfg.initial_getreide,
+                eisen=cfg.initial_eisen,
+                gold=cfg.initial_gold,
             ),
             traits=_nation_traits(gen),
             leader=rid,

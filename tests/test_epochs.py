@@ -62,7 +62,7 @@ def test_technology_accumulates_and_unlocks_ages() -> None:
     assert innovations
     # Mindestens eine Nation hat eine Tech-Stufe erreicht, ihr Wissen ist positiv.
     assert any(pol.tech_level >= 1 for pol in world.polities.values())
-    assert any(pol.stockpiles.wissen > 0.0 for pol in world.polities.values())
+    assert any(pol.knowledge > 0.0 for pol in world.polities.values())
     # Die Innovation benennt das erreichte Zeitalter.
     assert all(
         any(eff.field == "tech_age" for eff in e.effects) for e in innovations
