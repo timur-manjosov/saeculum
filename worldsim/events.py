@@ -116,6 +116,11 @@ class FactorLabel(StrEnum):
     GLAUBENSTREUE = "Glaubenstreue"
     GLAUBENSGROESSE = "Glaubensgroesse"
     GLAUBENSEIFER = "Glaubenseifer"
+    # Aenderung 4: utility-basierte Zielwahl (Faktoren des Zielmenues).
+    BEHARRUNG = "Beharrung"
+    VOLKSGROLL = "Volksgroll"
+    EISENBEDARF = "Eisenbedarf"
+    BEUTE = "Beute"
     # Phase 5: Schocks, Technologie, Wendepunkte.
     PEST = "Pest"
     ERDBEBEN = "Erdbeben"

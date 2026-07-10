@@ -34,24 +34,23 @@ from worldsim.systems import (
     diplomacy,
     disaster,
     epoch,
-    expansion,
     forge_ruler,
     founding,
     friction,
+    goals,
     grievance,
     identity,
     initial_strata,
     production,
     research,
     ruler,
-    war,
 )
 
 __all__ = ["SYSTEMS", "simulate", "worldgen"]
 
 # Feste Pipeline-Reihenfolge. Gruendung zuerst (meldet neue Nationen), dann der
 # Herrscher-Lauf (Alterung/Sukzession setzt die effektiven Traits dieses Jahres),
-# die Subsistenz-Kette, friedliche Expansion, danach Reibung/Diplomatie/Krieg.
+# die Subsistenz-Kette, danach Reibung/Diplomatie und zuletzt die Zielwahl.
 SYSTEMS: list[tuple[str, System]] = [
     ("founding", founding),
     ("ruler", ruler),
@@ -64,10 +63,12 @@ SYSTEMS: list[tuple[str, System]] = [
     # Aufbau (liest das frische Nahrungsdefizit und die Wohlstandsanteile).
     ("demografie", demografie),
     ("grievance", grievance),
-    ("expansion", expansion),
     ("friction", friction),
     ("diplomacy", diplomacy),
-    ("war", war),
+    # Die utility-basierte Zielwahl steht am Ende der Lage-Bildung: sie liest die
+    # frischen Groessen (Defizit, Groll, Reibung, Furcht, favor) und vollzieht das
+    # gewaehlte Ziel sofort — Expansion und Krieg sind ihre Handlungen.
+    ("goals", goals),
     # Am Tick-Ende: Glaubensausbreitung (Konversion) und Schisma. Die Affinitaets-
     # Faktoren in Diplomatie/Krieg lesen die Identitaeten des Vorjahres.
     ("identity", identity),

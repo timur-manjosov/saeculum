@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 9
+    config_version: int = 10
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -65,6 +65,9 @@ class Config:
 
     # --- consumption: Bevoelkerung isst Getreide ---------------------------
     food_per_person: float = 0.04
+    # Bezug der Hungers-Not (siehe systems._hunger): fehlt dieser Bruchteil des
+    # Jahresbedarfs, gilt die Not als total (Signal auf 1.0 gesaettigt).
+    famine_reference: float = 0.20
     # Getreide ist schlecht lagerbar: Vorrat ist auf diesen Bruchteil einer
     # Jahreskapazitaet begrenzt, damit schlechte Ernten Hunger ausloesen.
     food_storage_factor: float = 0.35
@@ -75,11 +78,17 @@ class Config:
     famine_deaths_per_deficit: float = 8.0
     # Aufsteigende Schwellen fuer Bevoelkerungs-Meilensteine.
     population_milestones: tuple[int, ...] = (300, 600, 1200, 2400, 5000)
+    # Landnot (siehe systems._land_pressure): erst ab diesem Auslastungsgrad der
+    # Tragfaehigkeit wird die Enge als Ressourcendruck spuerbar.
+    land_pressure_onset: float = 0.70
     # Rekrutierung Arbeiter -> Soldat: angestrebter Soldaten-Anteil und der Bruchteil
     # der Luecke, der pro Jahr geschlossen wird (homoeostatisch, ohne Zufall). Krieg
     # zehrt Soldaten, die Nachrekrutierung zieht Arbeiter aus der Getreideproduktion.
     target_soldier_fraction: float = 0.10
     recruit_rate: float = 0.10
+    # Wer das Ziel UEBERLEBEN verfolgt, schickt Soldaten zurueck aufs Feld: der
+    # angestrebte Soldaten-Anteil sinkt auf diesen Bruchteil (guns versus butter).
+    retrench_soldier_fraction: float = 0.5
 
     # --- Groll (grievance): baut sich auf, entlaedt sich noch nicht --------
     # Aufbau bei Getreidemangel (unter den unteren Schichten) und bei ungleichem
@@ -92,10 +101,41 @@ class Config:
     # der Mangel-Beitrag sich klar abhebt).
     grievance_cap: float = 8.0
 
+    # --- goals: utility-basierte Zielwahl (Aenderung 4) --------------------
+    # Kein Ziel hat mehr eine eigene Schwelle: die Ziele KONKURRIEREN. UEBERLEBEN
+    # traegt als "abwarten"-Option den Grundnutzen (Beharrung) — jede Handlung
+    # muss ihn schlagen. Damit ersetzt das Utility-argmax die alten reaktiven
+    # Trait-Schwellen (``expand_threshold``/``war_threshold`` sind entfallen).
+    goal_status_quo: float = 1.0
+    # Situative Gewichte des Ueberlebens-Ziels. Alle situativen Groessen der
+    # Zielbewertung sind auf 0..1 normiert, damit die Gewichte vergleichbar sind.
+    # Der Hunger wiegt hier BEWUSST leichter als in RESSOURCE_SICHERN: dieselbe
+    # Not treibt beide Ziele, die Differenz laesst sie zum Krieg kippen, sobald ein
+    # schwacher, fruchtbarer Nachbar erreichbar ist.
+    goal_hunger_weight: float = 0.6
+    goal_unrest_weight: float = 0.8
+    goal_fear_weight: float = 0.5
+    goal_caution_weight: float = 0.6
+    # RESSOURCE_SICHERN: eigener Mangel treibt, die erreichbare Beute lockt. Nur
+    # waehlbar, wenn wirklich etwas fehlt (Land, Getreide oder Bewaffnung).
+    # Der Haupttreiber ist die Landnot (siehe ``land_pressure_onset``), nicht die
+    # Hungersnot: eine verhungernde Nation ist zum Erobern zu schwach.
+    goal_seize_weight: float = 2.8
+    goal_famine_weight: float = 0.8
+    goal_iron_weight: float = 0.8
+    goal_prize_weight: float = 0.4
+    # Deckel auf die Fruchtbarkeit des erreichbaren Feldes (relativ zum eigenen Land).
+    goal_prize_cap: float = 2.0
+    # VERBUENDEN: die jaehrliche Werbung ist ein Gefallen an beide Kanten. Sie hat
+    # die automatische Koalitions-Pumpe abgeloest — Buendnisse werden GEWAEHLT und
+    # muessen gepflegt werden. ``goal_loyalty_weight`` bindet die Werbung an den
+    # bisherigen Partner, traegt allein aber kein Buendnis (sonst waeren Pakte ewig).
+    goal_coalition_weight: float = 1.4
+    goal_courtship_favor: float = 0.10
+    goal_loyalty_weight: float = 0.2
+
     # --- expansion: Anspruch auf ein angrenzendes freies Feld --------------
     expand_gold_cost: float = 15.0
-    # Entscheidungsschwelle fuer die (jetzt faktorbasierte) Expansionswahl.
-    expand_threshold: float = 1.0
 
     # --- diplomacy: Furcht, favor-Matrix, abgeleitete Buendnisse ------------
     # Jaehrlicher Zerfall des favor Richtung 0 — die Vergebung. "Ueber
@@ -105,8 +145,9 @@ class Config:
     # favor_drift/favor_decay bleibt bewusst unter der Buendnis-Schwelle:
     # Nachbarschaft allein stiftet kein Buendnis.
     favor_drift: float = 0.008
-    # Gemeinsame Furcht vor dem Staerksten baut favor auf — Balance of Power
-    # als favor-Quelle statt als geschaltetes Buendnis-Flag.
+    # Gemeinsame Furcht vor dem Staerksten baut favor auf — Balance of Power als
+    # ambiente favor-Quelle. Die *gezielte* Werbung einer Nation (Ziel VERBUENDEN)
+    # legt sich darauf: hier waechst der Untergrund, dort waehlt jemand den Partner.
     favor_coop_rate: float = 0.10
     # Der Buendnisschluss selbst ist ein Gefallen: hebt favor ueber die Schwelle
     # hinaus (natuerliche Hysterese gegen jaehrliches Flattern).
@@ -135,8 +176,7 @@ class Config:
     # Krieg: eine Koalition gegen den Staerksten kann ihn abschrecken/schlagen).
     ally_power_contribution: float = 0.6
 
-    # --- war: Kriegswunsch als Faktorsumme ---------------------------------
-    war_threshold: float = 1.2
+    # --- war: Vollzug der Kriegsziele --------------------------------------
     # Kriegsmuedigkeit: so viele Jahre kein neuer Krieg gegen dasselbe Ziel ...
     # (seit Aenderung 3 laenger: Wohlwollen ZERFAELLT jetzt statt dauerhaft zu
     # saettigen, also fehlt der alte permanente Vertrauens-Daempfer — die
@@ -166,6 +206,11 @@ class Config:
     # Bevoelkerungsverlust des Verlierers/Gewinners als Anteil bei einer Schlacht.
     war_loser_losses: float = 0.12
     war_winner_losses: float = 0.04
+    # Ausruestungsverlust (Eisen) einer Schlacht: der EINZIGE Abfluss des
+    # Eisenbestands. Ohne ihn saettigt die Bewaffnung dauerhaft und der Bestand
+    # (samt Eisenbedarf-Faktor) waere behavioral tot. Der Sieger schont sein Eisen.
+    war_iron_loss: float = 0.35
+    war_winner_iron_share: float = 0.5
     # Zufalls-Jitter im Machtvergleich der Schlacht (benannter Faktor "Zufall").
     battle_jitter: float = 0.15
     # Ein Krieg LOEST Spannung; danach bleibt nur dieser Groll-Restbetrag (Reibung

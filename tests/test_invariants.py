@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from worldsim.config import DEFAULT_CONFIG, Config
 from worldsim.driver import simulate
-from worldsim.models import StratumKind, World
+from worldsim.models import GoalKind, StratumKind, World
 from worldsim.systems import bevoelkerung
 
 
@@ -62,6 +62,13 @@ def _assert_world_invariants(world: World, cfg: Config) -> None:
         assert b in world.polities
         assert -1.0 <= rel.favor <= 1.0
         assert rel.dependency == 0.0
+
+    # Aenderung 4: jede etablierte Nation traegt am Tick-Ende ein Ziel aus dem
+    # festen Menue. Nur eine im laufenden Jahr entstandene Nation (Abspaltung)
+    # waehlt erst im naechsten Tick (siehe test_goals).
+    for pol in world.polities.values():
+        if pol.founded_year < world.year:
+            assert pol.goal in set(GoalKind)
 
     # Phase 3: Jede Polity hat am Tick-Ende genau einen lebenden Herrscher.
     living_leaders = {p.leader for p in world.polities.values()}

@@ -18,6 +18,7 @@ __all__ = [
     "AccessionMode",
     "EntityId",
     "Figure",
+    "GoalKind",
     "Identity",
     "NationTraits",
     "Polity",
@@ -171,6 +172,24 @@ class Stratum:
     wealth_share: float = 0.0
 
 
+class GoalKind(StrEnum):
+    """Das feste, kleine Zielmenue einer Nation (Aenderung 4).
+
+    Jede Nation waehlt pro Tick **gierig** das Ziel mit der hoechsten aktuellen
+    Utility (argmax, ein Schritt, myopisch) — keine Suche, keine Vorausplanung.
+    Die **Deklarationsreihenfolge ist bindend**: sie bricht Gleichstaende im
+    argmax (danach die ``EntityId`` des Ziel-Objekts). ``UEBERLEBEN`` steht
+    zuerst — es ist die stets erfuellbare Option "abwarten", gegen die sich jede
+    Handlung erst lohnen muss.
+    """
+
+    UEBERLEBEN = "ueberleben"
+    WACHSEN = "wachsen"
+    RESSOURCE_SICHERN = "ressource_sichern"
+    GROLL_VERGELTEN = "groll_vergelten"
+    VERBUENDEN = "verbuenden"
+
+
 @dataclass(frozen=True)
 class Relation:
     """Das historische Gedaechtnis als gerichtete Kante a -> b (reiner Wert).
@@ -254,6 +273,12 @@ class Polity:
     fear: dict[EntityId, float] = field(default_factory=dict)
     # Jahr des letzten Krieges gegen jede andere Nation (Kriegsmuedigkeit).
     last_war: dict[EntityId, int] = field(default_factory=dict)
+
+    # --- Aenderung 4: utility-basierte Zielwahl ----------------------------
+    # Das im laufenden Tick per argmax gewaehlte Ziel (``None`` bis zum ersten
+    # Tick einer Nation). Es traegt die Wahl in Systeme, die frueher im Tick
+    # laufen als die Zielwahl selbst (siehe ``systems._recruit``).
+    goal: GoalKind | None = None
 
     # --- Phase 3: Herrscher ------------------------------------------------
     # Aktueller Herrscher: Verweis (id) in ``World.rulers``. Im laufenden Tick

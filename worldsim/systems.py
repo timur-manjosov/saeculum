@@ -24,7 +24,7 @@ unveraendert am resultierenden Event. Rein mechanische Neuberechnungen
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from worldsim.config import Config
 from worldsim.events import (
@@ -41,6 +41,7 @@ from worldsim.events import (
 from worldsim.models import (
     AccessionMode,
     EntityId,
+    GoalKind,
     Identity,
     NationTraits,
     Polity,
@@ -64,11 +65,11 @@ __all__ = [
     "diplomacy",
     "disaster",
     "epoch",
-    "expansion",
     "favor",
     "forge_ruler",
     "founding",
     "friction",
+    "goals",
     "grievance",
     "hostile",
     "identity",
@@ -76,7 +77,6 @@ __all__ = [
     "production",
     "research",
     "ruler",
-    "war",
 ]
 
 # Ein System ist eine reine Funktion mit fester Signatur.
@@ -344,13 +344,20 @@ def _recruit(pol: Polity, cfg: Config) -> None:
     Ohne Zufall: der Bruchteil ``recruit_rate`` der Luecke zum Zielanteil wird je Jahr
     geschlossen. Rekrutierung zieht Arbeiter aus der Getreideproduktion, Demobilisierung
     gibt sie zurueck — die Guns-versus-Butter-Kopplung.
+
+    Das erklaerte Ziel steuert den Zielanteil: wer ums Ueberleben ringt, schickt
+    Soldaten zurueck aufs Feld. Da die Zielwahl spaeter im Tick laeuft, wirkt die
+    Politik des Vorjahres — eine bewusste, deterministische Verzoegerung.
     """
     total = sum(s.size for s in pol.strata)
     if total <= 0.0:
         return
     workers = _stratum_size(pol, StratumKind.ARBEITER)
     soldiers = _stratum_size(pol, StratumKind.SOLDAT)
-    delta = cfg.recruit_rate * (cfg.target_soldier_fraction * total - soldiers)
+    fraction = cfg.target_soldier_fraction
+    if pol.goal is GoalKind.UEBERLEBEN:
+        fraction *= cfg.retrench_soldier_fraction
+    delta = cfg.recruit_rate * (fraction * total - soldiers)
     # Nie mehr rekrutieren als Arbeiter da sind, nie mehr demobilisieren als Soldaten.
     delta = min(delta, workers) if delta > 0.0 else -min(-delta, soldiers)
     if delta == 0.0:
@@ -395,46 +402,6 @@ def grievance(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     return world
 
 
-def expansion(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Faktorbasierte Entscheidung, ein freies Nachbarfeld zu beanspruchen."""
-    for pid in sorted(world.polities):
-        pol = world.polities[pid]
-        if pol.food_deficit > 0.0:
-            continue
-        affordable = pol.stocks.gold - cfg.expand_gold_cost
-        if affordable < 0.0:
-            continue
-        target = _free_neighbor(world, pol)
-        if target is None:
-            continue
-
-        capacity = _land_capacity(world, pol, cfg)
-        surplus = pol.stocks.getreide / capacity if capacity > 0 else 0.0
-        traits = _effective_traits(world, pol)
-        decision = Decision()
-        decision.add(FactorLabel.EXPANSIONSDRANG, traits.expansion)
-        decision.add(FactorLabel.NAHRUNGSUEBERSCHUSS, surplus)
-        decision.add(FactorLabel.WOHLSTAND, min(affordable / cfg.expand_gold_cost, 1.0))
-        decision.add(FactorLabel.VORSICHT, -traits.caution * 0.5)
-        if not decision.passes(cfg.expand_threshold):
-            continue
-
-        pol.stocks = replace(pol.stocks, gold=pol.stocks.gold - cfg.expand_gold_cost)
-        world.regions[target].owner = pid
-        pol.territory = tuple(sorted((*pol.territory, target)))
-        log.append(
-            EventDraft(
-                year=world.year,
-                kind=EventKind.EXPANSION,
-                subjects=(pid, target),
-                factors=decision.as_factors(),
-                causes=decision.as_causes(),
-                effects=(Effect(target, "owner", None, pid),),
-            )
-        )
-    return world
-
-
 # === Konflikt & Diplomatie (Phase 2) ========================================
 
 def friction(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
@@ -471,15 +438,18 @@ def friction(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
 
 
 def diplomacy(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Furcht neu berechnen; favor zerfaellt und waechst; Status-Wechsel melden.
+    """Furcht neu berechnen; favor zerfaellt und driftet; Status-Wechsel melden.
 
-    Buendnis ist kein gespeichertes Flag mehr: gemeinsame Furcht vor dem
-    Staerksten (Balance of Power) und friedliche Nachbarschaft bauen favor auf,
-    der jaehrliche Zerfall traegt ihn ab; der Status wird pro Tick aus den
-    Schwellen abgeleitet. Kippt er gegenueber dem zuletzt im Log gemeldeten
-    Stand, wird BUENDNIS bzw. BUENDNIS_BRUCH emittiert. Verschwindet der
-    gemeinsame Feind, sinkt das Band durch den Zerfall von selbst unter die
-    Schwelle — und alter Groll verblasst, bis Feinde wieder neutral sind.
+    Buendnis ist kein gespeichertes Flag: gemeinsame Furcht vor dem Staerksten
+    (Balance of Power) und friedliche Nachbarschaft bauen favor auf, der
+    jaehrliche Zerfall traegt ihn ab; der Status wird pro Tick aus den Schwellen
+    abgeleitet. Kippt er gegenueber dem zuletzt im Log gemeldeten Stand, wird
+    BUENDNIS bzw. BUENDNIS_BRUCH emittiert. Diese Quellen sind **ambient**
+    (Nachbarschaft, gemeinsame Furcht); den gezielten Gefallen legt die Nation
+    obendrauf, wenn sie das Ziel VERBUENDEN waehlt (siehe ``goals``). Verschwindet
+    der gemeinsame Feind und bleibt die Werbung aus, sinkt das Band durch den
+    Zerfall von selbst unter die Schwelle — und alter Groll verblasst, bis Feinde
+    wieder neutral sind.
     """
     pids = sorted(world.polities)
     powers = {pid: _power(world.polities[pid], cfg) for pid in pids}
@@ -493,94 +463,436 @@ def diplomacy(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     return world
 
 
-def war(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Kriegswunsch je Nachbar als Faktorsumme; ueber Schwelle ⇒ Krieg + Schlacht.
+# === Utility-basierte Zielwahl (Aenderung 4) ================================
 
-    Pro Tick fuehrt eine Nation hoechstens einen Krieg; ein bereits beteiligter
-    Gegner wird in diesem Tick nicht erneut verwickelt.
+# Die Deklarationsreihenfolge des Zielmenues bricht Gleichstaende im argmax.
+_GOAL_ORDER: dict[GoalKind, int] = {kind: i for i, kind in enumerate(GoalKind)}
+# Ziele, die in einen Krieg muenden (beide vollziehen ihn ueber ``_wage_war``).
+_WAR_GOALS = (GoalKind.RESSOURCE_SICHERN, GoalKind.GROLL_VERGELTEN)
+
+
+@dataclass(frozen=True)
+class _GoalChoice:
+    """Ein bewertetes Ziel: seine Art, seine Faktorsumme und sein Objekt.
+
+    ``target`` ist die ``EntityId``, auf die sich das Ziel richtet (Region bei
+    WACHSEN, Nation bei Krieg/Buendnis) — bei UEBERLEBEN gibt es keine.
+    """
+
+    kind: GoalKind
+    decision: Decision
+    target: EntityId | None = None
+
+
+def goals(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """Jede Nation waehlt gierig ihr Ziel (argmax) und verfolgt es sofort.
+
+    Ein Schritt, myopisch, ohne Suche und ohne Vorausplanung: jedes erfuellbare
+    Ziel des festen Menues wird als Summe **benannter Faktoren** bewertet
+    (Trait des Herrschers mal Situation), das hoechstbewertete gewaehlt und im
+    selben Tick vollzogen. Die exakt verwendete Faktorliste haengt am
+    resultierenden Event — sie IST die Begruendung.
+
+    Dieses System hat die frueheren Systeme ``expansion`` und ``war`` abgeloest:
+    Expansion und Krieg sind Vollzuege eines gewaehlten Ziels, keine eigenstaendig
+    geschwellten Reaktionen mehr ("ist Aggression hoch?" → "welches Ziel sichert
+    jetzt am besten Ueberleben/Wachstum?"). Pro Tick fuehrt eine Nation hoechstens
+    einen Krieg; ein bereits verwickelter Gegner wird nicht erneut angegriffen.
     """
     pids = sorted(world.polities)
     powers = {pid: _power(world.polities[pid], cfg) for pid in pids}
+    strongest = max(pids, key=lambda p: (powers[p], -p))
     busy: set[EntityId] = set()
 
-    for x in pids:
-        if x in busy:
-            continue
-        pol = world.polities[x]
-        # Globale Kriegsmuedigkeit: nach einem Krieg ruht die Nation eine Weile.
-        if pol.last_war and world.year - max(pol.last_war.values()) < cfg.war_global_cooldown_years:
-            continue
-        best_target: EntityId | None = None
-        best_score = cfg.war_threshold
-        best_decision: Decision | None = None
-
-        for y in _bordering_nations(world, pol):
-            if y in busy or allied(world, x, y, cfg):
-                continue
-            # Kriegsmuedigkeit: nach einem Krieg eine Weile kein neuer gegen Y.
-            if world.year - pol.last_war.get(y, -10_000) < cfg.war_cooldown_years:
-                continue
-            decision = _war_desire(world, x, y, powers, cfg, log)
-            if decision.score > best_score:
-                best_score = decision.score
-                best_target = y
-                best_decision = decision
-
-        if best_target is not None and best_decision is not None:
-            _wage_war(world, x, best_target, best_decision, rng, cfg, log)
-            busy.add(x)
-            busy.add(best_target)
+    for pid in pids:
+        choice = _choose_goal(world, pid, powers, strongest, busy, cfg, log)
+        world.polities[pid].goal = choice.kind
+        _pursue_goal(world, pid, choice, busy, rng, cfg, log)
     return world
 
 
-def _war_desire(
+def _goal_rank(choice: _GoalChoice) -> tuple[float, int, int]:
+    """Sortierschluessel des argmax (kleinster gewinnt).
+
+    Hoechster Score zuerst; bei Gleichstand die Reihenfolge des Zielmenues,
+    danach die ``EntityId`` des Ziel-Objekts (Determinismus-Vertrag).
+    """
+    target = choice.target if choice.target is not None else -1
+    return (-choice.decision.score, _GOAL_ORDER[choice.kind], target)
+
+
+def _choose_goal(
+    world: World,
+    pid: EntityId,
+    powers: dict[EntityId, float],
+    strongest: EntityId,
+    busy: set[EntityId],
+    cfg: Config,
+    log: EventLog,
+) -> _GoalChoice:
+    """argmax ueber das Zielmenue; nur *erfuellbare* Ziele stehen zur Wahl.
+
+    Erfuellbarkeit ist keine Schwelle, sondern eine Vorbedingung der Handlung
+    (kein freies Feld, kein Angriffsziel, kein Mangel zu decken). UEBERLEBEN ist
+    stets erfuellbar und traegt den Grundnutzen ``Beharrung`` — es ist die Option
+    "abwarten", gegen die sich jede Handlung erst lohnen muss.
+    """
+    targets = _war_targets(world, pid, busy, cfg)
+    menu = [_score_ueberleben(world, pid, cfg)]
+    for candidate in (
+        _score_wachsen(world, pid, cfg),
+        _score_ressource_sichern(world, pid, targets, powers, cfg, log),
+        _score_groll_vergelten(world, pid, targets, powers, cfg, log),
+        _score_verbuenden(world, pid, strongest, cfg),
+    ):
+        if candidate is not None:
+            menu.append(candidate)
+    return min(menu, key=_goal_rank)
+
+
+def _pursue_goal(
+    world: World,
+    pid: EntityId,
+    choice: _GoalChoice,
+    busy: set[EntityId],
+    rng: Stream,
+    cfg: Config,
+    log: EventLog,
+) -> None:
+    """Vollziehe das gewaehlte Ziel; die Faktorliste wandert ans Event."""
+    target = choice.target
+    if target is None:  # UEBERLEBEN: kein Feld, kein Krieg, keine Werbung.
+        return
+    if choice.kind is GoalKind.WACHSEN:
+        _expand(world, pid, target, choice.decision, cfg, log)
+    elif choice.kind in _WAR_GOALS:
+        _wage_war(world, pid, target, choice.decision, rng, cfg, log)
+        busy.add(pid)
+        busy.add(target)
+    elif choice.kind is GoalKind.VERBUENDEN:
+        _court(world, pid, target, cfg)
+
+
+# --- die fuenf Ziele des Menues ---------------------------------------------
+
+def _score_ueberleben(world: World, pid: EntityId, cfg: Config) -> _GoalChoice:
+    """Auf sich selbst zurueckziehen: Hunger, Unmut und Furcht wiegen schwer.
+
+    Stets erfuellbar und damit der Nullpunkt des Menues; der Grundnutzen
+    ``Beharrung`` ist die Traegheit des Status quo.
+    """
+    pol = world.polities[pid]
+    et = _effective_traits(world, pol)
+    decision = Decision()
+    decision.add(FactorLabel.BEHARRUNG, cfg.goal_status_quo)
+    decision.add(FactorLabel.NAHRUNGSDEFIZIT, cfg.goal_hunger_weight * _hunger(pol, cfg))
+    decision.add(FactorLabel.VOLKSGROLL, cfg.goal_unrest_weight * _volksgroll(pol, cfg))
+    decision.add(FactorLabel.FURCHT, cfg.goal_fear_weight * _dread(pol, cfg))
+    decision.add(FactorLabel.VORSICHT, cfg.goal_caution_weight * et.caution)
+    return _GoalChoice(GoalKind.UEBERLEBEN, decision)
+
+
+def _score_wachsen(world: World, pid: EntityId, cfg: Config) -> _GoalChoice | None:
+    """Ein freies Nachbarfeld beanspruchen — erfuellbar nur mit Land und Gold."""
+    pol = world.polities[pid]
+    affordable = pol.stocks.gold - cfg.expand_gold_cost
+    if affordable < 0.0:
+        return None
+    target = _free_neighbor(world, pol)
+    if target is None:
+        return None
+
+    capacity = _land_capacity(world, pol, cfg)
+    surplus = pol.stocks.getreide / capacity if capacity > 0 else 0.0
+    et = _effective_traits(world, pol)
+    decision = Decision()
+    decision.add(FactorLabel.EXPANSIONSDRANG, et.expansion)
+    decision.add(FactorLabel.NAHRUNGSUEBERSCHUSS, surplus)
+    decision.add(FactorLabel.WOHLSTAND, min(affordable / cfg.expand_gold_cost, 1.0))
+    decision.add(FactorLabel.VORSICHT, -et.caution * 0.5)
+    return _GoalChoice(GoalKind.WACHSEN, decision, target)
+
+
+def _score_ressource_sichern(
+    world: World,
+    pid: EntityId,
+    targets: list[EntityId],
+    powers: dict[EntityId, float],
+    cfg: Config,
+    log: EventLog,
+) -> _GoalChoice | None:
+    """Die fehlende Ressource beim Nachbarn holen: Mangel treibt, Beute lockt.
+
+    Erfuellbar nur bei echtem Mangel — man kann keine Ressource sichern, die man
+    nicht braucht. Damit entsteht dieser Krieg **nachweisbar aus der
+    Ressourcenlage**. Der stehende Antrieb ist die *Landnot* (Bevoelkerung gegen
+    Tragfaehigkeit), nicht die akute Hungersnot: wer schon verhungert, ist zu
+    geschwaecht zum Erobern und zieht sich zurueck (UEBERLEBEN). Hunger und
+    Eisenbedarf verstaerken; die Fruchtbarkeit des erreichbaren Feldes waehlt das Ziel.
+    """
+    pol = world.polities[pid]
+    pressure = _land_pressure(world, pol, cfg)
+    hunger = _hunger(pol, cfg)
+    iron_gap = _iron_gap(pol, cfg)
+    if pressure <= 0.0 and hunger <= 0.0 and iron_gap <= 0.0:
+        return None
+
+    et = _effective_traits(world, pol)
+    best: _GoalChoice | None = None
+    for y in targets:
+        # Nur ein Ziel mit erreichbarem Feld kommt in Frage: eine Nation, die
+        # ausser ihrer Hauptstadt nichts haelt, gibt kein Land her — ein Krieg um
+        # Ressourcen waere gegen sie ein Krieg um nichts.
+        prize = _contested_region(world, pid, y)
+        if prize is None:
+            continue
+        weakness, weakness_causes = _weakness(world, pid, y, powers, cfg, log)
+        decision = Decision()
+        decision.add(FactorLabel.RESSOURCENDRUCK, cfg.goal_seize_weight * pressure)
+        decision.add(FactorLabel.NAHRUNGSDEFIZIT, cfg.goal_famine_weight * hunger)
+        decision.add(FactorLabel.EISENBEDARF, cfg.goal_iron_weight * iron_gap)
+        decision.add(FactorLabel.BEUTE, cfg.goal_prize_weight * _prize(world, pid, prize, cfg))
+        decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
+        decision.add(FactorLabel.MILITAERVORTEIL, _advantage(world, pid, y, powers, cfg))
+        decision.add(FactorLabel.FURCHT, -pol.fear.get(y, 0.0))
+        decision.add(FactorLabel.VORSICHT, -et.caution)
+        best = _better_target(best, _GoalChoice(GoalKind.RESSOURCE_SICHERN, decision, y))
+    return best
+
+
+def _score_groll_vergelten(
+    world: World,
+    pid: EntityId,
+    targets: list[EntityId],
+    powers: dict[EntityId, float],
+    cfg: Config,
+    log: EventLog,
+) -> _GoalChoice | None:
+    """Alte Rechnung begleichen: Groll aus der Matrix, Reibung an der Grenze.
+
+    Das Gegenstueck zum Ressourcenkrieg — hier treibt das historische Gedaechtnis
+    (negativer favor), nicht der Mangel.
+    """
+    pol = world.polities[pid]
+    et = _effective_traits(world, pol)
+    best: _GoalChoice | None = None
+    for y in targets:
+        py = world.polities[y]
+        et_y = _effective_traits(world, py)
+        weakness, weakness_causes = _weakness(world, pid, y, powers, cfg, log)
+        decision = Decision()
+
+        # Das historische Gedaechtnis: Groll rechtfertigt den Krieg, Wohlwollen
+        # daempft ihn — und beides verblasst ueber Jahrzehnte.
+        goodwill = favor(world, pid, y)
+        if goodwill < 0.0:
+            decision.add(FactorLabel.MISSTRAUEN, -goodwill)
+        else:
+            decision.add(FactorLabel.VERTRAUEN, -goodwill * 0.5)
+        decision.add(
+            FactorLabel.GRENZREIBUNG,
+            pol.friction.get(y, 0.0) * cfg.war_friction_weight,
+            causes=_recent_pair_events(
+                log, world.year, EventKind.GRENZREIBUNG, pid, y, cfg.cause_window_years
+            ),
+        )
+        decision.add(FactorLabel.AGGRESSION, et.aggression)
+        # Affinitaet (Phase 4): fremder Glaube rechtfertigt den Krieg leichter. Wird
+        # dieser Faktor zum Hauptantrieb, gilt der Krieg als Glaubenskrieg (chronicle).
+        if py.identity_id is not None and py.identity_id != pol.identity_id:
+            decision.add(FactorLabel.GLAUBENSGRABEN, cfg.identity_war_friction)
+        # Persoenliche Rivalitaet: zwei aggressive Herrscher heizen den Krieg an.
+        if (
+            et.aggression >= cfg.personal_aggression_threshold
+            and et_y.aggression >= cfg.personal_aggression_threshold
+        ):
+            decision.add(FactorLabel.PERSOENLICHE_RIVALITAET, cfg.personal_rivalry_weight)
+        decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
+        decision.add(FactorLabel.MILITAERVORTEIL, _advantage(world, pid, y, powers, cfg))
+        decision.add(FactorLabel.FURCHT, -pol.fear.get(y, 0.0))
+        decision.add(FactorLabel.VORSICHT, -et.caution)
+        best = _better_target(best, _GoalChoice(GoalKind.GROLL_VERGELTEN, decision, y))
+    return best
+
+
+def _score_verbuenden(
+    world: World, pid: EntityId, strongest: EntityId, cfg: Config
+) -> _GoalChoice | None:
+    """Um einen Partner werben — die gewaehlte Balance of Power.
+
+    Gemeinsame Furcht vor dem Staerksten ist der Hauptantrieb; Diplomatie-Trait,
+    gleicher Glaube und gewachsenes Vertrauen verstaerken ihn. Offene Feinde sind
+    keine Kandidaten; **bestehende Verbuendete sehr wohl**: ein Pakt lebt von der
+    fortgesetzten Werbung. Bleibt sie aus (die gemeinsame Furcht ist verblasst),
+    traegt der Zerfall den favor unter die Schwelle und das Buendnis endet.
+    """
+    pol = world.polities[pid]
+    et = _effective_traits(world, pol)
+    best: _GoalChoice | None = None
+    for q in sorted(world.polities):
+        if q == pid or hostile(world, pid, q, cfg):
+            continue
+        pq = world.polities[q]
+        decision = Decision()
+        decision.add(
+            FactorLabel.GEMEINSAMER_FEIND,
+            cfg.goal_coalition_weight * _common_dread(pol, pq, strongest, cfg),
+        )
+        decision.add(FactorLabel.DIPLOMATIE, et.diplomacy)
+        if pol.identity_id is not None and pol.identity_id == pq.identity_id:
+            decision.add(FactorLabel.GLAUBENSAFFINITAET, cfg.identity_alliance_bonus)
+        # Gewachsenes Vertrauen bindet: es haelt die Werbung beim selben Partner
+        # (kein jaehrliches Partner-Hopping), traegt allein aber kein Buendnis.
+        decision.add(FactorLabel.VERTRAUEN, cfg.goal_loyalty_weight * favor(world, pid, q))
+        best = _better_target(best, _GoalChoice(GoalKind.VERBUENDEN, decision, q))
+    return best
+
+
+def _better_target(best: _GoalChoice | None, candidate: _GoalChoice) -> _GoalChoice:
+    """Bestes Objekt eines Ziels: hoechster Score, Gleichstand nach kleinster EntityId."""
+    if best is None:
+        return candidate
+    return min((best, candidate), key=_goal_rank)
+
+
+# --- Vollzug der Ziele ------------------------------------------------------
+
+def _expand(
+    world: World,
+    pid: EntityId,
+    region: EntityId,
+    decision: Decision,
+    cfg: Config,
+    log: EventLog,
+) -> None:
+    """Vollzug von WACHSEN: das freie Nachbarfeld wird beansprucht."""
+    pol = world.polities[pid]
+    pol.stocks = replace(pol.stocks, gold=pol.stocks.gold - cfg.expand_gold_cost)
+    world.regions[region].owner = pid
+    pol.territory = tuple(sorted((*pol.territory, region)))
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.EXPANSION,
+            subjects=(pid, region),
+            factors=decision.as_factors(),
+            causes=decision.as_causes(),
+            effects=(Effect(region, "owner", None, pid),),
+        )
+    )
+
+
+def _court(world: World, pid: EntityId, partner: EntityId, cfg: Config) -> None:
+    """Vollzug von VERBUENDEN: ein Jahr Werbung ist ein Gefallen auf beiden Kanten.
+
+    Kein eigenes Event — der Pakt selbst wird gemeldet, sobald der favor beider
+    Seiten die Buendnis-Schwelle kreuzt (``diplomacy``); die Werbung ist der Weg
+    dorthin, nicht das Ereignis.
+    """
+    add_favor(world, pid, partner, cfg.goal_courtship_favor)
+    add_favor(world, partner, pid, cfg.goal_courtship_favor)
+
+
+# --- situative Groessen der Zielbewertung -----------------------------------
+
+def _hunger(pol: Polity, cfg: Config) -> float:
+    """Not durch Getreidemangel, auf 0..1 normiert (0 = satt, 1 = volle Hungersnot).
+
+    Bezug ist ``famine_reference``: fehlt dieser Bruchteil des Jahresbedarfs, gilt
+    die Not als total. Ein Defizit von einem Fuenftel des Jahresbedarfs ist bereits
+    eine Hungersnot mit Toten — die Groesse darf nicht linear bis 1.0 verduennt
+    werden, sonst geht das Mangel-Signal im Rauschen unter.
+    """
+    need = bevoelkerung(pol) * cfg.food_per_person
+    if need <= 0.0:
+        return 0.0
+    return min(1.0, pol.food_deficit / (need * cfg.famine_reference))
+
+
+def _land_pressure(world: World, pol: Polity, cfg: Config) -> float:
+    """Landnot: Bevoelkerung gegen die Tragfaehigkeit des eigenen Landes (0..1).
+
+    0, solange Spielraum bleibt (unter ``land_pressure_onset``), 1, wenn die
+    Bevoelkerung die Tragfaehigkeit erreicht. Das ist der **stehende**
+    Ressourcendruck, aus dem Eroberungskriege erwachsen — anders als die akute
+    Hungersnot, die eine bereits geschwaechte Nation zum Rueckzug zwingt.
+    Expansion, Pest und Eroberung senken ihn, Wachstum hebt ihn: der Antrieb
+    atmet mit der Demografie.
+    """
+    efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
+    capacity = _land_capacity(world, pol, cfg) * efficiency / cfg.food_per_person
+    if capacity <= 0.0:
+        return 1.0
+    span = max(1e-9, 1.0 - cfg.land_pressure_onset)
+    return _clamp01((bevoelkerung(pol) / capacity - cfg.land_pressure_onset) / span)
+
+
+def _iron_gap(pol: Polity, cfg: Config) -> float:
+    """Anteil der unbewaffneten Soldaten (0 = alle geruestet) — der Eisenbedarf."""
+    soldiers = _stratum_size(pol, StratumKind.SOLDAT)
+    if soldiers <= 0.0:
+        return 0.0
+    return max(0.0, 1.0 - pol.stocks.eisen / (soldiers * cfg.iron_per_soldier))
+
+
+def _volksgroll(pol: Polity, cfg: Config) -> float:
+    """Groessengewichteter Groll der unteren Schichten, normiert auf 0..1."""
+    lower = [s for s in pol.strata if s.kind != StratumKind.ELITE]
+    size = sum(s.size for s in lower)
+    if size <= 0.0 or cfg.grievance_cap <= 0.0:
+        return 0.0
+    weighted = sum(s.grievance * s.size for s in lower) / size
+    return min(1.0, weighted / cfg.grievance_cap)
+
+
+def _dread(pol: Polity, cfg: Config) -> float:
+    """Furcht vor der bedrohlichsten anderen Nation, normiert auf 0..1.
+
+    Die Zielbewertung mischt situative Groessen additiv — deshalb muessen sie
+    dieselbe Skala haben. ``Polity.fear`` laeuft bis ``fear_cap`` (3.0) und wuerde
+    Hunger, Groll und Vorsicht (je 0..1) sonst schlicht ueberstimmen.
+    """
+    return max(pol.fear.values(), default=0.0) / cfg.fear_cap if cfg.fear_cap > 0 else 0.0
+
+
+def _common_dread(pa: Polity, pb: Polity, strongest: EntityId, cfg: Config) -> float:
+    """Gemeinsame Furcht zweier Nationen vor dem Staerksten, normiert auf 0..1."""
+    common = min(pa.fear.get(strongest, 0.0), pb.fear.get(strongest, 0.0))
+    return common / cfg.fear_cap if cfg.fear_cap > 0 else 0.0
+
+
+def _prize(world: World, x: EntityId, region: EntityId, cfg: Config) -> float:
+    """Fruchtbarkeit des erreichbaren Feldes — relativ zum eigenen Land (gedeckelt)."""
+    px = world.polities[x]
+    own_mean = _land_capacity(world, px, cfg) / max(len(px.territory), 1)
+    if own_mean <= 0.0:
+        return 0.0
+    gain = world.regions[region].food_capacity * cfg.grain_per_capacity
+    return min(gain / own_mean, cfg.goal_prize_cap)
+
+
+def _advantage(
+    world: World, x: EntityId, y: EntityId, powers: dict[EntityId, float], cfg: Config
+) -> float:
+    """Gedeckelter Machtvorsprung inklusive Verbuendeter (Balance of Power).
+
+    Der Deckel haelt rohe Ueberlegenheit davon ab, ein endloser Kriegsgrund zu sein.
+    """
+    margin = _effective_power(world, x, powers, cfg) - _effective_power(world, y, powers, cfg)
+    return _clamp(margin / cfg.power_reference, -cfg.advantage_cap, cfg.advantage_cap)
+
+
+def _weakness(
     world: World,
     x: EntityId,
     y: EntityId,
     powers: dict[EntityId, float],
     cfg: Config,
     log: EventLog,
-) -> Decision:
-    """Baue den Kriegswunsch von X gegen Y als benannte Faktorsumme."""
-    px = world.polities[x]
-    et_x = _effective_traits(world, px)
-    decision = Decision()
-
-    # Effektive Macht schliesst Verbuendete ein (Balance of Power); der Faktor
-    # ist gedeckelt, damit rohe Ueberlegenheit kein endloser Kriegsgrund ist.
-    advantage = (_effective_power(world, x, powers, cfg) - _effective_power(world, y, powers, cfg))
-    advantage = _clamp(advantage / cfg.power_reference, -cfg.advantage_cap, cfg.advantage_cap)
-    decision.add(FactorLabel.MILITAERVORTEIL, advantage)
-    decision.add(FactorLabel.AGGRESSION, et_x.aggression)
-
-    # Affinitaet (Phase 4): fremder Glaube rechtfertigt den Krieg leichter. Wird
-    # dieser Faktor zum Hauptantrieb, gilt der Krieg als Glaubenskrieg (chronicle).
-    py_ident = world.polities[y].identity_id
-    if py_ident is not None and py_ident != px.identity_id:
-        decision.add(FactorLabel.GLAUBENSGRABEN, cfg.identity_war_friction)
-
-    # Persoenliche Rivalitaet: zwei aggressive Herrscher heizen den Krieg an.
-    et_y = _effective_traits(world, world.polities[y])
-    if (
-        et_x.aggression >= cfg.personal_aggression_threshold
-        and et_y.aggression >= cfg.personal_aggression_threshold
-    ):
-        decision.add(FactorLabel.PERSOENLICHE_RIVALITAET, cfg.personal_rivalry_weight)
-
-    friction_events = _recent_pair_events(
-        log, world.year, EventKind.GRENZREIBUNG, x, y, cfg.cause_window_years
-    )
-    decision.add(
-        FactorLabel.GRENZREIBUNG,
-        px.friction.get(y, 0.0) * cfg.war_friction_weight,
-        causes=friction_events,
-    )
-
-    if px.food_deficit > 0.0:
-        decision.add(FactorLabel.RESSOURCENDRUCK, 1.0)
-
+) -> tuple[float, list[EventId]]:
+    """Wie verwundbar Y gerade ist: klar unterlegen und/oder eben verlassen."""
     weakness = 0.0
-    weakness_causes: list[EventId] = []
+    causes: list[EventId] = []
     power_x = _power_of(world, x, powers, cfg)
     if _power_of(world, y, powers, cfg) < power_x * cfg.weakness_power_ratio:
         weakness += cfg.weakness_bonus
@@ -589,20 +901,31 @@ def _war_desire(
     )
     if ally_loss is not None:
         weakness += cfg.ally_loss_bonus
-        weakness_causes.append(ally_loss)
-    decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
+        causes.append(ally_loss)
+    return weakness, causes
 
-    # Das historische Gedaechtnis: Groll (negative favor) rechtfertigt den Krieg,
-    # Wohlwollen daempft ihn — und beides verblasst ueber Jahrzehnte.
-    goodwill = favor(world, x, y)
-    if goodwill < 0.0:
-        decision.add(FactorLabel.MISSTRAUEN, -goodwill)
-    else:
-        decision.add(FactorLabel.VERTRAUEN, -goodwill * 0.5)
 
-    decision.add(FactorLabel.FURCHT, -px.fear.get(y, 0.0))
-    decision.add(FactorLabel.VORSICHT, -et_x.caution)
-    return decision
+def _war_targets(
+    world: World, pid: EntityId, busy: set[EntityId], cfg: Config
+) -> list[EntityId]:
+    """Angreifbare Nachbarn (stabil sortiert): kein Verbuendeter, keine Muedigkeit.
+
+    Kriegsmuedigkeit und laufende Verwicklungen sind Vorbedingungen der Handlung,
+    keine Entscheidungs-Schwellen — sie machen ein Kriegsziel schlicht unerfuellbar.
+    """
+    pol = world.polities[pid]
+    if pid in busy:
+        return []
+    # Globale Kriegsmuedigkeit: nach einem Krieg ruht die Nation eine Weile.
+    if pol.last_war and world.year - max(pol.last_war.values()) < cfg.war_global_cooldown_years:
+        return []
+    return [
+        y
+        for y in _bordering_nations(world, pol)
+        if y not in busy
+        and not allied(world, pid, y, cfg)
+        and world.year - pol.last_war.get(y, -10_000) >= cfg.war_cooldown_years
+    ]
 
 
 def _wage_war(
@@ -639,6 +962,14 @@ def _wage_war(
     loser_before = bevoelkerung(pl)
     pl.strata = _scaled_strata(pl.strata, 1.0 - cfg.war_loser_losses)
     pw.strata = _scaled_strata(pw.strata, 1.0 - cfg.war_winner_losses)
+    # Ausruestung geht mit den Gefallenen verloren. Der Krieg ist der einzige
+    # Abfluss des Eisenbestands: ohne ihn waere die Bewaffnung nach wenigen
+    # Jahrzehnten dauerhaft gesaettigt, das Eisen ein toter Bestand und der
+    # Eisenbedarf ein Faktor, der nie etwas entscheidet.
+    pl.stocks = replace(pl.stocks, eisen=pl.stocks.eisen * (1.0 - cfg.war_iron_loss))
+    pw.stocks = replace(
+        pw.stocks, eisen=pw.stocks.eisen * (1.0 - cfg.war_iron_loss * cfg.war_winner_iron_share)
+    )
 
     effects: list[Effect] = []
     region = _contested_region(world, winner, loser)
@@ -1661,13 +1992,14 @@ def _drift_favor(world: World, cfg: Config) -> None:
 def _cooperate_against_hegemon(
     world: World, pids: list[EntityId], strongest: EntityId, cfg: Config
 ) -> None:
-    """Balance of Power als favor-Quelle: gemeinsame Furcht ist ein Gefallen.
+    """Balance of Power als **ambiente** favor-Quelle: gemeinsame Furcht verbindet.
 
-    Nicht-staerkste Nationen, die denselben Hegemon fuerchten, kooperieren und
-    bauen jaehrlich favor zueinander auf; Diplomatie-Traits und gleicher Glaube
-    verstaerken das. Ueber Jahre hebt es den favor ueber die Buendnis-Schwelle —
-    die Koalition ENTSTEHT aus dem Gedaechtnis, statt geschaltet zu werden, und
-    verfaellt mit dem Zerfall, wenn die gemeinsame Furcht endet.
+    Nicht-staerkste Nationen, die denselben Hegemon fuerchten, ruecken jaehrlich
+    ein Stueck zusammen; Diplomatie-Traits und gleicher Glaube verstaerken das.
+    Das ist der Untergrund, aus dem Koalitionen wachsen — die *gezielte* Werbung
+    einer Nation (Ziel VERBUENDEN, siehe ``_court``) legt sich darauf und
+    entscheidet, welcher Pakt zuerst die Schwelle erreicht. Endet die gemeinsame
+    Furcht, versiegt die Quelle und der Zerfall loest das Band.
     """
     for i, a in enumerate(pids):
         if a == strongest:
