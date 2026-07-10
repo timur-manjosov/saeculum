@@ -22,6 +22,7 @@ __all__ = [
     "NationTraits",
     "Polity",
     "Region",
+    "Relation",
     "Ruler",
     "Settlement",
     "Stocks",
@@ -170,6 +171,21 @@ class Stratum:
     wealth_share: float = 0.0
 
 
+@dataclass(frozen=True)
+class Relation:
+    """Das historische Gedaechtnis als gerichtete Kante a -> b (reiner Wert).
+
+    ``favor`` ist akkumuliertes Wohlwollen (+) bzw. Groll (-) und zerfaellt ueber
+    Jahrzehnte Richtung 0 (Vergebung). Buendnis und Feindschaft sind KEINE
+    gespeicherten Flags: sie werden pro Tick aus ``favor`` abgeleitet (siehe
+    ``systems.allied``/``systems.hostile``). ``dependency`` (wie stark a auf b's
+    Ressourcen angewiesen ist) bleibt 0.0, bis der Handel sie fuellt (Aenderung 5).
+    """
+
+    favor: float = 0.0
+    dependency: float = 0.0
+
+
 @dataclass
 class Region:
     """Geographie als Verhaltenstraeger ("Feld"). Keine Tile-Mikrosimulation.
@@ -230,10 +246,8 @@ class Polity:
 
     # --- Phase 2: Charakter, Diplomatie, Konflikt --------------------------
     traits: NationTraits = field(default_factory=NationTraits)
-    # Trust pro anderer Nation (iteriertes Spiel, Bereich etwa -1..+1).
-    relations: dict[EntityId, float] = field(default_factory=dict)
-    # Aktuelle Verbuendete (stabil sortiert).
-    allies: tuple[EntityId, ...] = ()
+    # Beziehungen (favor/Groll) leben als gerichtete Kanten in ``World.relations``;
+    # Buendnis/Feindschaft werden pro Tick daraus abgeleitet — keine Flags hier.
     # Persistenter Groll/Grenzreibung pro anderer Nation (akkumuliert ueber Jahre).
     friction: dict[EntityId, float] = field(default_factory=dict)
     # Transient: pro Tick neu berechnete Furcht vor jeder anderen Nation.
@@ -300,6 +314,12 @@ class World:
     # Identitaets-Register (Phase 4). Durch Schisma entstandene Identitaeten
     # kommen hinzu; alle bleiben fuer die Chronik namentlich aufloesbar.
     identities: dict[EntityId, Identity] = field(default_factory=dict)
+
+    # --- Aenderung 3: das historische Gedaechtnis ---------------------------
+    # Gerichtete Beziehungs-Kanten (a_id, b_id) -> Relation, sparse: eine
+    # fehlende Kante ist neutral (favor 0). Im Entscheidungspfad wird
+    # ausschliesslich nach (a_id, b_id) sortiert iteriert (Determinismus).
+    relations: dict[tuple[EntityId, EntityId], Relation] = field(default_factory=dict)
 
     # --- Phase 5: Wendepunkt-Erkennung & Zeitalter -------------------------
     # Erinnerte Trend-Zustaende, gegen die der ``epoch``-Waechter je Tick

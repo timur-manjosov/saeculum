@@ -52,13 +52,16 @@ def _assert_world_invariants(world: World, cfg: Config) -> None:
     claimed = sum(len(p.territory) for p in world.polities.values())
     assert claimed <= cfg.num_regions
 
-    # Phase 2: Buendnisse sind symmetrisch; Trust bleibt im gueltigen Bereich.
-    for pid, pol in world.polities.items():
-        for ally in pol.allies:
-            assert ally in world.polities
-            assert pid in world.polities[ally].allies
-        for trust in pol.relations.values():
-            assert -1.0 <= trust <= 1.0
+    # Aenderung 3: die Beziehungs-Matrix ist sparse und gueltig — gerichtete
+    # Kanten zwischen existierenden Nationen, favor im Bereich, dependency ruht
+    # (0.0) bis zum Handel (Aenderung 5). Buendnis/Feindschaft sind abgeleitet,
+    # keine gespeicherten Flags (siehe test_relations).
+    for (a, b), rel in world.relations.items():
+        assert a != b
+        assert a in world.polities
+        assert b in world.polities
+        assert -1.0 <= rel.favor <= 1.0
+        assert rel.dependency == 0.0
 
     # Phase 3: Jede Polity hat am Tick-Ende genau einen lebenden Herrscher.
     living_leaders = {p.leader for p in world.polities.values()}

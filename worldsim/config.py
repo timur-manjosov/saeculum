@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 8
+    config_version: int = 9
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -97,11 +97,29 @@ class Config:
     # Entscheidungsschwelle fuer die (jetzt faktorbasierte) Expansionswahl.
     expand_threshold: float = 1.0
 
-    # --- diplomacy: Furcht, Trust, Buendnisse (Balance of Power) -----------
-    # Trust-Drift pro Jahr zwischen friedlichen Nachbarn (Kooperation).
-    trust_drift: float = 0.02
-    # Trust-Einbruch beim Angriff (Verrat); Honor des Opfers skaliert die Reaktion.
-    trust_drop_on_attack: float = 0.6
+    # --- diplomacy: Furcht, favor-Matrix, abgeleitete Buendnisse ------------
+    # Jaehrlicher Zerfall des favor Richtung 0 — die Vergebung. "Ueber
+    # Jahrzehnte": bei 0.04 betraegt die Halbwertszeit ~17 Jahre.
+    favor_decay: float = 0.04
+    # Kleine jaehrliche Annaeherung friedlicher Nachbarn. Das Gleichgewicht
+    # favor_drift/favor_decay bleibt bewusst unter der Buendnis-Schwelle:
+    # Nachbarschaft allein stiftet kein Buendnis.
+    favor_drift: float = 0.008
+    # Gemeinsame Furcht vor dem Staerksten baut favor auf — Balance of Power
+    # als favor-Quelle statt als geschaltetes Buendnis-Flag.
+    favor_coop_rate: float = 0.10
+    # Der Buendnisschluss selbst ist ein Gefallen: hebt favor ueber die Schwelle
+    # hinaus (natuerliche Hysterese gegen jaehrliches Flattern).
+    favor_pact_bonus: float = 0.20
+    # favor-Einbruch beim Angriff (Verrat); Honor des Opfers skaliert die Reaktion.
+    favor_drop_on_attack: float = 0.6
+    # Abgeleitete Status-Schwellen (nichts davon wird gespeichert): Buendnis ab
+    # beidseitigem favor >= ..., Feindschaft ab einseitigem favor <= ...
+    alliance_favor_threshold: float = 0.5
+    enmity_favor_threshold: float = -0.25
+    # Kanten mit |favor| darunter (und ruhender dependency) entfallen — die
+    # Matrix bleibt sparse, eine fehlende Kante ist neutral.
+    favor_prune_epsilon: float = 0.005
     # Bezugsgroesse, um Machtdifferenzen in Furcht/Vorteil zu normieren. Die
     # Schlagkraft ruht jetzt auf Soldaten (statt roher Bevoelkerung), daher kleiner.
     power_reference: float = 300.0
@@ -116,18 +134,16 @@ class Config:
     # Beitrag eines Verbuendeten zur effektiven Macht (Balance of Power wirkt im
     # Krieg: eine Koalition gegen den Staerksten kann ihn abschrecken/schlagen).
     ally_power_contribution: float = 0.6
-    # Buendnis-Entscheidungsschwelle und Trust-Bruchschwelle.
-    alliance_threshold: float = 1.0
-    alliance_break_trust: float = -0.25
-    # Trust-Gewinn beim Buendnisschluss.
-    trust_gain_on_alliance: float = 0.3
 
     # --- war: Kriegswunsch als Faktorsumme ---------------------------------
     war_threshold: float = 1.2
     # Kriegsmuedigkeit: so viele Jahre kein neuer Krieg gegen dasselbe Ziel ...
-    war_cooldown_years: int = 8
+    # (seit Aenderung 3 laenger: Wohlwollen ZERFAELLT jetzt statt dauerhaft zu
+    # saettigen, also fehlt der alte permanente Vertrauens-Daempfer — die
+    # Kriegsfrequenz wird ueber die Muedigkeit neu geeicht).
+    war_cooldown_years: int = 12
     # ... und ueberhaupt kein neuer Krieg (gegen irgendwen) so lange nach einem.
-    war_global_cooldown_years: int = 4
+    war_global_cooldown_years: int = 6
     # Deckel auf den Militaervorteil-Faktor: rohe Staerke ist kein Freibrief.
     advantage_cap: float = 1.5
     # Gewicht der akkumulierten Grenzreibung im Kriegswunsch.
@@ -139,6 +155,8 @@ class Config:
     ally_loss_bonus: float = 0.6
     # Jaehrlicher Zuwachs an Grenzreibung zwischen rivalisierenden Nachbarn.
     friction_growth: float = 0.15
+    # Offene Feindschaft (abgeleitet aus Groll) laesst Reibung schneller wachsen.
+    hostility_friction_bonus: float = 1.0
     # Obergrenze der akkumulierten Reibung (sonst eskaliert sie unbegrenzt).
     friction_cap: float = 4.0
     # Schwelle, ab der akkumulierte Reibung ein GRENZREIBUNG-Event ausloest.
@@ -189,7 +207,7 @@ class Config:
     fragmentation_size_weight: float = 0.30
     # Nur teilbar, wenn mindestens so viele Regionen vorhanden sind (Hauptstadt bleibt).
     secession_min_territory: int = 3
-    # Anfangs-Misstrauen zwischen Abspaltung und Mutterland.
+    # Anfangs-Groll (negative favor-Kanten) zwischen Abspaltung und Mutterland.
     secession_distrust: float = 0.30
 
     # --- persoenliche Rivalitaet (schlank) ---------------------------------
@@ -228,6 +246,9 @@ class Config:
     # Nur so viele Jahre nach dem Machtantritt kann der neue Herrscher ein Schisma
     # ausloesen (kleines Fenster ⇒ ein Impuls je Thronwechsel, kein Dauerdruck).
     schism_window_years: int = 1
+    # Das Schisma ist ein Groll-Stoss auf die favor-Kanten zu den ehemaligen
+    # Glaubensbruedern; ob ein Buendnis daran zerbricht, entscheidet der favor-Stand.
+    schism_favor_drop: float = 0.5
 
     # --- research/Tech: Wissen akkumuliert, Schwellen schalten Zeitalter frei ---
     # Grund-Wissenszuwachs je Jahr, durch den innovation-Trait und die Bevoelkerung

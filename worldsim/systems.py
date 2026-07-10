@@ -44,6 +44,7 @@ from worldsim.models import (
     Identity,
     NationTraits,
     Polity,
+    Relation,
     Ruler,
     Stocks,
     Stratum,
@@ -55,6 +56,8 @@ from worldsim.rng import Stream
 
 __all__ = [
     "System",
+    "add_favor",
+    "allied",
     "bevoelkerung",
     "consumption",
     "demografie",
@@ -62,10 +65,12 @@ __all__ = [
     "disaster",
     "epoch",
     "expansion",
+    "favor",
     "forge_ruler",
     "founding",
     "friction",
     "grievance",
+    "hostile",
     "identity",
     "initial_strata",
     "production",
@@ -123,6 +128,49 @@ def _stratum_size(pol: Polity, kind: StratumKind) -> float:
 def _scaled_strata(strata: tuple[Stratum, ...], factor: float) -> tuple[Stratum, ...]:
     """Skaliere jede Schichtgroesse (Verluste/Teilung); Anteile & Groll bleiben."""
     return tuple(replace(s, size=max(0.0, s.size * factor)) for s in strata)
+
+
+# === Beziehungs-Matrix: favor-Helfer & abgeleitete Status ===================
+
+def favor(world: World, a: EntityId, b: EntityId) -> float:
+    """favor der gerichteten Kante a -> b (fehlende Kante = neutral = 0.0)."""
+    rel = world.relations.get((a, b))
+    return rel.favor if rel is not None else 0.0
+
+
+def add_favor(world: World, a: EntityId, b: EntityId, delta: float) -> None:
+    """Haenge ein favor-Delta an die Kante a -> b (Gefallen +, Groll -).
+
+    Die EINE zentrale Schreibstelle fuer alle Systeme (Diplomatie, Krieg,
+    Abspaltung, Schisma, ...); geklammert auf [-1, +1].
+    """
+    if a == b or delta == 0.0:
+        return
+    rel = world.relations.get((a, b), Relation())
+    world.relations[(a, b)] = replace(rel, favor=_clamp(rel.favor + delta))
+
+
+def allied(world: World, a: EntityId, b: EntityId, cfg: Config) -> bool:
+    """Abgeleiteter Buendnis-Status: beidseitiger favor ueber der Schwelle.
+
+    Kein gespeichertes Flag: der Status folgt der Matrix und kippt im selben
+    Tick, in dem favor die Schwelle kreuzt (das Event meldet der naechste
+    diplomacy-Lauf).
+    """
+    return (
+        favor(world, a, b) >= cfg.alliance_favor_threshold
+        and favor(world, b, a) >= cfg.alliance_favor_threshold
+    )
+
+
+def hostile(world: World, a: EntityId, b: EntityId, cfg: Config) -> bool:
+    """Abgeleiteter Feindschafts-Status: schon einseitiger Groll vergiftet das Paar."""
+    return min(favor(world, a, b), favor(world, b, a)) <= cfg.enmity_favor_threshold
+
+
+def _allies_of(world: World, pid: EntityId, cfg: Config) -> list[EntityId]:
+    """Stabil sortierte Liste der aktuell Verbuendeten (pro Tick abgeleitet)."""
+    return [q for q in sorted(world.polities) if q != pid and allied(world, pid, q, cfg)]
 
 
 # === Subsistenz & Demografie (Phase 1, an neue Signatur angepasst) ==========
@@ -400,10 +448,15 @@ def friction(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         pol = world.polities[pid]
         pressure = 1.0 + (1.0 if pol.food_deficit > 0.0 else 0.0)
         for other in _bordering_nations(world, pol):
-            if other in pol.allies:
+            if allied(world, pid, other, cfg):
                 continue
+            growth = cfg.friction_growth * pressure
+            # Offene Feindschaft (abgeleitet aus dem Groll der Matrix) laesst
+            # die Reibung schneller wachsen — Rachezyklen, bis der Groll verblasst.
+            if hostile(world, pid, other, cfg):
+                growth *= 1.0 + cfg.hostility_friction_bonus
             before = pol.friction.get(other, 0.0)
-            after = min(before + cfg.friction_growth * pressure, cfg.friction_cap)
+            after = min(before + growth, cfg.friction_cap)
             pol.friction[other] = after
             if int(after / cfg.friction_event_step) > int(before / cfg.friction_event_step):
                 log.append(
@@ -418,23 +471,25 @@ def friction(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
 
 
 def diplomacy(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Furcht neu berechnen, Trust fortschreiben, Buendnisse bilden/brechen.
+    """Furcht neu berechnen; favor zerfaellt und waechst; Status-Wechsel melden.
 
-    Kern-Regel "verbuende dich gegen den Staerksten" (Balance of Power):
-    nicht-staerkste Nationen, die denselben Hegemon fuerchten und einander trauen,
-    schliessen ein Buendnis. Es bricht bei Trust-Verfall oder wenn der gemeinsame
-    Feind seine Vormacht verliert.
+    Buendnis ist kein gespeichertes Flag mehr: gemeinsame Furcht vor dem
+    Staerksten (Balance of Power) und friedliche Nachbarschaft bauen favor auf,
+    der jaehrliche Zerfall traegt ihn ab; der Status wird pro Tick aus den
+    Schwellen abgeleitet. Kippt er gegenueber dem zuletzt im Log gemeldeten
+    Stand, wird BUENDNIS bzw. BUENDNIS_BRUCH emittiert. Verschwindet der
+    gemeinsame Feind, sinkt das Band durch den Zerfall von selbst unter die
+    Schwelle — und alter Groll verblasst, bis Feinde wieder neutral sind.
     """
     pids = sorted(world.polities)
     powers = {pid: _power(world.polities[pid], cfg) for pid in pids}
     strongest = max(pids, key=lambda p: (powers[p], -p))
 
     _recompute_fear(world, pids, powers, cfg)
-    _drift_trust(world, cfg)
-    # Bestehende Buendnisse zuerst pruefen, damit ein frisch geschlossenes nicht
-    # im selben Tick wieder zerbricht.
-    _break_alliances(world, pids, cfg, log)
-    _form_alliances(world, pids, powers, strongest, cfg, log)
+    _decay_favor(world, cfg)
+    _drift_favor(world, cfg)
+    _cooperate_against_hegemon(world, pids, strongest, cfg)
+    _emit_alliance_flips(world, pids, strongest, cfg, log)
     return world
 
 
@@ -460,7 +515,7 @@ def war(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         best_decision: Decision | None = None
 
         for y in _bordering_nations(world, pol):
-            if y in pol.allies or y in busy:
+            if y in busy or allied(world, x, y, cfg):
                 continue
             # Kriegsmuedigkeit: nach einem Krieg eine Weile kein neuer gegen Y.
             if world.year - pol.last_war.get(y, -10_000) < cfg.war_cooldown_years:
@@ -537,11 +592,13 @@ def _war_desire(
         weakness_causes.append(ally_loss)
     decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
 
-    trust = px.relations.get(y, 0.0)
-    if trust < 0.0:
-        decision.add(FactorLabel.MISSTRAUEN, -trust)
+    # Das historische Gedaechtnis: Groll (negative favor) rechtfertigt den Krieg,
+    # Wohlwollen daempft ihn — und beides verblasst ueber Jahrzehnte.
+    goodwill = favor(world, x, y)
+    if goodwill < 0.0:
+        decision.add(FactorLabel.MISSTRAUEN, -goodwill)
     else:
-        decision.add(FactorLabel.VERTRAUEN, -trust * 0.5)
+        decision.add(FactorLabel.VERTRAUEN, -goodwill * 0.5)
 
     decision.add(FactorLabel.FURCHT, -px.fear.get(y, 0.0))
     decision.add(FactorLabel.VORSICHT, -et_x.caution)
@@ -608,12 +665,11 @@ def _wage_war(
         )
     )
 
-    # Nachklang: Trust sinkt, Groll bleibt. Honor des Opfers skaliert die Reaktion.
-    px.relations[y] = _clamp(px.relations.get(y, 0.0) - cfg.trust_drop_on_attack)
+    # Nachklang: favor bricht ein — der Groll steht fortan als negative Kante im
+    # historischen Gedaechtnis. Honor des Opfers skaliert die Reaktion.
+    add_favor(world, x, y, -cfg.favor_drop_on_attack)
     honor_y = _effective_traits(world, py).honor
-    py.relations[x] = _clamp(
-        py.relations.get(x, 0.0) - cfg.trust_drop_on_attack * (0.5 + honor_y)
-    )
+    add_favor(world, y, x, -cfg.favor_drop_on_attack * (0.5 + honor_y))
     # Der Krieg loest die aufgestaute Spannung; es bleibt nur ein Groll-Restbetrag,
     # der sich ueber Jahre neu aufbaut (verhindert Krieg jedes Jahr).
     px.friction[y] = cfg.grudge_floor
@@ -986,9 +1042,10 @@ def _spawn_breakaway(
         # Glaubens-Kontinuitaet: die Abspaltung teilt zunaechst die Identitaet.
         identity_id=parent.identity_id,
     )
-    # Gegenseitiges Misstrauen und frischer Groll zwischen Tochter und Mutterland.
-    parent.relations[new_pid] = -cfg.secession_distrust
-    new_pol.relations[parent.id] = -cfg.secession_distrust
+    # Gegenseitiger Groll (negative favor-Kanten) und frische Grenzreibung
+    # zwischen Tochter und Mutterland.
+    add_favor(world, parent.id, new_pid, -cfg.secession_distrust)
+    add_favor(world, new_pid, parent.id, -cfg.secession_distrust)
     parent.friction[new_pid] = cfg.grudge_floor
     new_pol.friction[parent.id] = cfg.grudge_floor
     world.polities[new_pid] = new_pol
@@ -1144,34 +1201,25 @@ def _maybe_schisma(
     world.identities[new_id] = Identity(id=new_id, name=make_name(rng), parent=old_faith)
     pol.identity_id = new_id
 
-    # Ehemalige Glaubensbrueder unter den Verbuendeten: das Band zerbricht.
-    broken = [a for a in pol.allies if world.polities[a].identity_id == old_faith]
-    effects = [Effect(pid, "identity_id", old_faith, new_id)]
-    for ally in broken:
-        effects.append(Effect(pid, "ally_lost", ally, None))
-    schisma_id = log.append(
+    log.append(
         EventDraft(
             year=world.year,
             kind=EventKind.SCHISMA,
             subjects=(pid, new_id, old_faith),
             factors=decision.as_factors(),
             causes=(accession,),
-            effects=tuple(effects),
+            effects=(Effect(pid, "identity_id", old_faith, new_id),),
         )
     )
-    for ally in broken:
-        pol.allies = tuple(a for a in pol.allies if a != ally)
-        other = world.polities[ally]
-        other.allies = tuple(a for a in other.allies if a != pid)
-        log.append(
-            EventDraft(
-                year=world.year,
-                kind=EventKind.BUENDNIS_BRUCH,
-                subjects=(min(pid, ally), max(pid, ally)),
-                factors=(Factor(FactorLabel.GLAUBENSSPALTUNG, 1.0),),
-                causes=(schisma_id,),
-            )
-        )
+    # Das Schisma ist ein Groll-Stoss auf die Kanten zu den ehemaligen
+    # Glaubensbruedern. Ob ein Buendnis daran zerbricht, entscheidet der
+    # favor-Stand — den Bruch meldet der naechste diplomacy-Lauf und zitiert
+    # dieses SCHISMA-Event als Ursache.
+    for other in followers:
+        if other == pid:
+            continue
+        add_favor(world, pid, other, -cfg.schism_favor_drop)
+        add_favor(world, other, pid, -cfg.schism_favor_drop)
 
 
 # === Schocks, Technologie, Wendepunkte (Phase 5) ============================
@@ -1436,7 +1484,7 @@ def _watch_dominant_faith(world: World, cfg: Config, log: EventLog) -> None:
 
 def _watch_alliance_collapse(world: World, cfg: Config, log: EventLog) -> None:
     """Langlebigstes Buendnis: zerbricht das aelteste (sehr alte) Buendnis ⇒ Wendepunkt."""
-    max_standing = _max_standing_alliance_age(world, log)
+    max_standing = _max_standing_alliance_age(world, cfg, log)
     best_break: tuple[int, Event] | None = None
     for event in log.by_year(world.year):
         if event.kind != EventKind.BUENDNIS_BRUCH:
@@ -1531,17 +1579,15 @@ def _recent_faith_shift(
     return found[-1] if found else None
 
 
-def _max_standing_alliance_age(world: World, log: EventLog) -> int:
-    """Alter (Jahre) des aeltesten noch bestehenden Buendnisses."""
+def _max_standing_alliance_age(world: World, cfg: Config, log: EventLog) -> int:
+    """Alter (Jahre) des aeltesten noch bestehenden Buendnisses (Status abgeleitet)."""
     best = 0
-    seen: set[tuple[EntityId, EntityId]] = set()
-    for pid in sorted(world.polities):
-        for ally in world.polities[pid].allies:
-            pair = (min(pid, ally), max(pid, ally))
-            if pair in seen:
+    pids = sorted(world.polities)
+    for i, a in enumerate(pids):
+        for b in pids[i + 1 :]:
+            if not allied(world, a, b, cfg):
                 continue
-            seen.add(pair)
-            formed = _alliance_formation_year(log, pair[0], pair[1], len(log))
+            formed = _alliance_formation_year(log, a, b, len(log))
             if formed is not None:
                 best = max(best, world.year - formed)
     return best
@@ -1580,111 +1626,185 @@ def _recompute_fear(
                 pol.fear[other] = min(relative * (1.0 + caution), cfg.fear_cap)
 
 
-def _drift_trust(world: World, cfg: Config) -> None:
-    """Friedliche Nachbarschaft baut Trust langsam auf; Honor verstaerkt Reziprozitaet."""
+def _decay_favor(world: World, cfg: Config) -> None:
+    """favor zerfaellt jedes Jahr Richtung 0 — die Vergebung des Gedaechtnisses.
+
+    Kanten mit winzigem |favor| (und ruhender dependency) entfallen ganz, damit
+    die Matrix sparse bleibt. Ausschliesslich nach (a_id, b_id) sortiert
+    iterieren (Determinismus-Vertrag der Matrix).
+    """
+    for key in sorted(world.relations):
+        rel = world.relations[key]
+        faded = rel.favor * (1.0 - cfg.favor_decay)
+        if abs(faded) < cfg.favor_prune_epsilon and rel.dependency == 0.0:
+            del world.relations[key]  # neutrale Kante = keine Kante
+        else:
+            world.relations[key] = replace(rel, favor=faded)
+
+
+def _drift_favor(world: World, cfg: Config) -> None:
+    """Friedliche Nachbarschaft naehert langsam an; offener Groll blockiert das.
+
+    Feindschaft muss erst verblassen (Zerfall ueber die Schwelle), bevor die
+    Annaeherung wieder greift — alte Feinde werden erst neutral, dann Partner.
+    Honor verstaerkt die Reziprozitaet.
+    """
     for pid in sorted(world.polities):
         pol = world.polities[pid]
         honor = _effective_traits(world, pol).honor
         for other in _bordering_nations(world, pol):
-            current = pol.relations.get(other, 0.0)
-            drift = cfg.trust_drift * (0.5 + honor)
-            pol.relations[other] = _clamp(current + drift)
+            if hostile(world, pid, other, cfg):
+                continue
+            add_favor(world, pid, other, cfg.favor_drift * (0.5 + honor))
 
 
-def _form_alliances(
+def _cooperate_against_hegemon(
+    world: World, pids: list[EntityId], strongest: EntityId, cfg: Config
+) -> None:
+    """Balance of Power als favor-Quelle: gemeinsame Furcht ist ein Gefallen.
+
+    Nicht-staerkste Nationen, die denselben Hegemon fuerchten, kooperieren und
+    bauen jaehrlich favor zueinander auf; Diplomatie-Traits und gleicher Glaube
+    verstaerken das. Ueber Jahre hebt es den favor ueber die Buendnis-Schwelle —
+    die Koalition ENTSTEHT aus dem Gedaechtnis, statt geschaltet zu werden, und
+    verfaellt mit dem Zerfall, wenn die gemeinsame Furcht endet.
+    """
+    for i, a in enumerate(pids):
+        if a == strongest:
+            continue
+        pa = world.polities[a]
+        fear_a = pa.fear.get(strongest, 0.0)
+        if fear_a <= 0.0:
+            continue
+        for b in pids[i + 1 :]:
+            if b == strongest:
+                continue
+            pb = world.polities[b]
+            common_fear = min(fear_a, pb.fear.get(strongest, 0.0))
+            if common_fear <= 0.0:
+                continue
+            boost = (
+                _effective_traits(world, pa).diplomacy
+                + _effective_traits(world, pb).diplomacy
+            ) / 2.0
+            # Affinitaet (Phase 4): gleicher Glaube stiftet ein festeres Band.
+            if pa.identity_id is not None and pa.identity_id == pb.identity_id:
+                boost += cfg.identity_alliance_bonus
+            delta = cfg.favor_coop_rate * common_fear * (0.5 + boost)
+            add_favor(world, a, b, delta)
+            add_favor(world, b, a, delta)
+
+
+def _logged_alliances(log: EventLog) -> set[tuple[EntityId, EntityId]]:
+    """Paare, deren juengstes Buendnis-Event im Log ein Schluss (kein Bruch) ist.
+
+    Der Log erinnert nur den zuletzt GEMELDETEN Status; der aktuelle Status
+    selbst wird stets frisch aus favor abgeleitet (kein gespeichertes Feld).
+    """
+    latest: dict[tuple[EntityId, EntityId], tuple[EventId, bool]] = {}
+    for kind, formed in ((EventKind.BUENDNIS, True), (EventKind.BUENDNIS_BRUCH, False)):
+        for event in log.by_kind(kind):
+            a, b = event.subjects[0], event.subjects[1]
+            pair = (min(a, b), max(a, b))
+            seen = latest.get(pair)
+            if seen is None or event.id > seen[0]:
+                latest[pair] = (event.id, formed)
+    return {pair for pair, (_, formed) in latest.items() if formed}
+
+
+def _emit_alliance_flips(
     world: World,
     pids: list[EntityId],
-    powers: dict[EntityId, float],
     strongest: EntityId,
     cfg: Config,
     log: EventLog,
 ) -> None:
-    """Bilde Buendnisse zweier nicht-staerkster Nationen gegen den Hegemon."""
+    """Melde Wechsel des abgeleiteten Buendnis-Status als Events (Chronik-Anker)."""
+    was_allied = _logged_alliances(log)
     for i, a in enumerate(pids):
         for b in pids[i + 1 :]:
-            if a == strongest or b == strongest:
+            now = allied(world, a, b, cfg)
+            if now == ((a, b) in was_allied):
                 continue
-            pa, pb = world.polities[a], world.polities[b]
-            if b in pa.allies:
-                continue
-            # Buendnis nur bei echtem gemeinsamem Feind: beide muessen den
-            # Hegemon tatsaechlich fuerchten (sonst zerbraeche es sofort wieder).
-            common_fear = min(pa.fear.get(strongest, 0.0), pb.fear.get(strongest, 0.0))
-            if common_fear <= 0.0:
-                continue
-
-            decision = Decision()
-            decision.add(
-                FactorLabel.VERTRAUEN,
-                (pa.relations.get(b, 0.0) + pb.relations.get(a, 0.0)) / 2.0,
-            )
-            decision.add(
-                FactorLabel.GEMEINSAMER_FEIND,
-                common_fear,
-                causes=_recent_subject_event_all(
-                    log, world.year, EventKind.BEVOELKERUNG_MEILENSTEIN, strongest,
-                    cfg.cause_window_years,
-                ),
-            )
-            decision.add(
-                FactorLabel.DIPLOMATIE,
-                (
-                    _effective_traits(world, pa).diplomacy
-                    + _effective_traits(world, pb).diplomacy
-                )
-                / 2.0,
-            )
-            # Affinitaet (Phase 4): gleicher Glaube stiftet ein festeres Band.
-            if pa.identity_id is not None and pa.identity_id == pb.identity_id:
-                decision.add(FactorLabel.GLAUBENSAFFINITAET, cfg.identity_alliance_bonus)
-            if not decision.passes(cfg.alliance_threshold):
-                continue
-
-            pa.allies = tuple(sorted({*pa.allies, b}))
-            pb.allies = tuple(sorted({*pb.allies, a}))
-            pa.relations[b] = _clamp(pa.relations.get(b, 0.0) + cfg.trust_gain_on_alliance)
-            pb.relations[a] = _clamp(pb.relations.get(a, 0.0) + cfg.trust_gain_on_alliance)
-            log.append(
-                EventDraft(
-                    year=world.year,
-                    kind=EventKind.BUENDNIS,
-                    subjects=(a, b, strongest),
-                    factors=decision.as_factors(),
-                    causes=decision.as_causes(),
-                )
-            )
+            if now:
+                _emit_alliance_formed(world, a, b, strongest, cfg, log)
+            else:
+                _emit_alliance_broken(world, a, b, cfg, log)
 
 
-def _break_alliances(
-    world: World, pids: list[EntityId], cfg: Config, log: EventLog
+def _emit_alliance_formed(
+    world: World,
+    a: EntityId,
+    b: EntityId,
+    strongest: EntityId,
+    cfg: Config,
+    log: EventLog,
 ) -> None:
-    """Loese Buendnisse bei Trust-Verfall oder wenn der Hegemon nicht mehr droht."""
-    powers = {pid: _power(world.polities[pid], cfg) for pid in pids}
-    strongest = max(pids, key=lambda p: (powers[p], -p))
+    """favor hat die Schwelle beidseitig ueberschritten: der Pakt wird geschlossen."""
+    pa, pb = world.polities[a], world.polities[b]
+    # Der Schluss selbst ist ein Gefallen: er hebt favor ueber die Schwelle
+    # hinaus (natuerliche Hysterese gegen jaehrliches Flattern an der Kante).
+    add_favor(world, a, b, cfg.favor_pact_bonus)
+    add_favor(world, b, a, cfg.favor_pact_bonus)
 
-    for a in pids:
-        pa = world.polities[a]
-        for b in list(pa.allies):
-            if b <= a:  # jeden Bruch nur einmal behandeln (von der kleineren id aus)
-                continue
-            pb = world.polities[b]
-            trust = min(pa.relations.get(b, 0.0), pb.relations.get(a, 0.0))
-            no_common_threat = (
-                pa.fear.get(strongest, 0.0) <= 0.0 and pb.fear.get(strongest, 0.0) <= 0.0
-            )
-            if trust >= cfg.alliance_break_trust and not no_common_threat:
-                continue
+    decision = Decision()
+    decision.add(FactorLabel.VERTRAUEN, min(favor(world, a, b), favor(world, b, a)))
+    common_fear = min(pa.fear.get(strongest, 0.0), pb.fear.get(strongest, 0.0))
+    decision.add(
+        FactorLabel.GEMEINSAMER_FEIND,
+        common_fear,
+        causes=_recent_subject_event_all(
+            log, world.year, EventKind.BEVOELKERUNG_MEILENSTEIN, strongest,
+            cfg.cause_window_years,
+        ),
+    )
+    if pa.identity_id is not None and pa.identity_id == pb.identity_id:
+        decision.add(FactorLabel.GLAUBENSAFFINITAET, cfg.identity_alliance_bonus)
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.BUENDNIS,
+            subjects=(a, b, strongest),
+            factors=decision.as_factors(),
+            causes=decision.as_causes(),
+        )
+    )
 
-            pa.allies = tuple(x for x in pa.allies if x != b)
-            pb.allies = tuple(x for x in pb.allies if x != a)
-            log.append(
-                EventDraft(
-                    year=world.year,
-                    kind=EventKind.BUENDNIS_BRUCH,
-                    subjects=(a, b),
-                    factors=(Factor(FactorLabel.MISSTRAUEN, -trust + 0.5),),
-                )
-            )
+
+def _emit_alliance_broken(
+    world: World, a: EntityId, b: EntityId, cfg: Config, log: EventLog
+) -> None:
+    """favor ist unter die Schwelle gesunken: der Bruch wird gemeldet.
+
+    Als Ursachen werden die naheliegenden favor-Zehrer im Fenster zitiert
+    (Schlacht/Abspaltung zwischen den beiden, Schisma eines Partners); fehlen
+    sie, war es der blosse Zerfall — die gemeinsame Furcht ist verblasst.
+    """
+    minfav = min(favor(world, a, b), favor(world, b, a))
+    causes: set[EventId] = set()
+    causes.update(
+        _recent_pair_events(log, world.year, EventKind.SCHLACHT, a, b, cfg.cause_window_years)
+    )
+    causes.update(
+        _recent_pair_events(log, world.year, EventKind.ABSPALTUNG, a, b, cfg.cause_window_years)
+    )
+    for pid in (a, b):
+        schisma = _recent_subject_event(
+            log, world.year, EventKind.SCHISMA, pid, cfg.cause_window_years
+        )
+        if schisma is not None:
+            causes.add(schisma)
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.BUENDNIS_BRUCH,
+            subjects=(a, b),
+            factors=(
+                Factor(FactorLabel.MISSTRAUEN, cfg.alliance_favor_threshold - minfav),
+            ),
+            causes=tuple(sorted(causes)),
+        )
+    )
 
 
 # === reine Helfer ===========================================================
@@ -1724,10 +1844,12 @@ def _power_of(
 def _effective_power(
     world: World, pid: EntityId, powers: dict[EntityId, float], cfg: Config
 ) -> float:
-    """Eigene Macht plus anteiligen Beitrag der Verbuendeten (Koalition)."""
-    pol = world.polities[pid]
+    """Eigene Macht plus anteiligen Beitrag der Verbuendeten (Koalition).
+
+    Die Verbuendeten sind pro Tick aus der favor-Matrix abgeleitet, kein Feld.
+    """
     total = _power_of(world, pid, powers, cfg)
-    for ally in pol.allies:
+    for ally in _allies_of(world, pid, cfg):
         total += _power_of(world, ally, powers, cfg) * cfg.ally_power_contribution
     return total
 
