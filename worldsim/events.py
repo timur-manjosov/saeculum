@@ -121,6 +121,8 @@ class FactorLabel(StrEnum):
     VOLKSGROLL = "Volksgroll"
     EISENBEDARF = "Eisenbedarf"
     BEUTE = "Beute"
+    # Aenderung 5: Handel und Abhaengigkeit (Krieg aus Handelsverflechtung).
+    HANDELSABHAENGIGKEIT = "Handelsabhaengigkeit"
     # Phase 5: Schocks, Technologie, Wendepunkte.
     PEST = "Pest"
     ERDBEBEN = "Erdbeben"

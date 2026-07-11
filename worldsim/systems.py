@@ -62,6 +62,7 @@ __all__ = [
     "bevoelkerung",
     "consumption",
     "demografie",
+    "dependency",
     "diplomacy",
     "disaster",
     "epoch",
@@ -77,6 +78,7 @@ __all__ = [
     "production",
     "research",
     "ruler",
+    "trade",
 ]
 
 # Ein System ist eine reine Funktion mit fester Signatur.
@@ -136,6 +138,16 @@ def favor(world: World, a: EntityId, b: EntityId) -> float:
     """favor der gerichteten Kante a -> b (fehlende Kante = neutral = 0.0)."""
     rel = world.relations.get((a, b))
     return rel.favor if rel is not None else 0.0
+
+
+def dependency(world: World, a: EntityId, b: EntityId) -> float:
+    """Handels-Abhaengigkeit der Kante a -> b: Anteil von a's Bedarf, den b deckt.
+
+    Vom ``trade``-System gefuellt (Aenderung 5); fehlende Kante = 0.0. Speist als
+    benannter Faktor die Zielwahl (siehe ``_score_ressource_sichern``).
+    """
+    rel = world.relations.get((a, b))
+    return rel.dependency if rel is not None else 0.0
 
 
 def add_favor(world: World, a: EntityId, b: EntityId, delta: float) -> None:
@@ -234,6 +246,9 @@ def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
         harvest = rng.uniform(low, high)
         regions = len(pol.territory)
+        # Eisen entsteht nur in Regionen mit Vorkommen (Aenderung 5): eisenarme
+        # Nationen muessen es importieren oder erobern — die Quelle der Abhaengigkeit.
+        iron_regions = sum(1 for r in pol.territory if world.regions[r].iron_rich)
         land = _land_capacity(world, pol, cfg)
         # Arbeiter erzeugen das Getreide: Ausbeute ist das Minimum aus Land und Arbeit
         # (Liebigsches Minimum). Genug Arbeiter ⇒ landbegrenzt (wie zuvor); fehlen sie
@@ -245,7 +260,7 @@ def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         pol.stocks = replace(
             s,
             getreide=s.getreide + land * harvest * efficiency * labor,
-            eisen=s.eisen + regions * cfg.iron_per_region * efficiency,
+            eisen=s.eisen + iron_regions * cfg.iron_per_region * efficiency,
             gold=s.gold + regions * cfg.gold_per_region * efficiency,
         )
     return world
@@ -266,6 +281,215 @@ def consumption(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         storage_cap = cfg.food_storage_factor * _land_capacity(world, pol, cfg)
         pol.stocks = replace(pol.stocks, getreide=min(getreide, storage_cap))
     return world
+
+
+# === Handel und Abhaengigkeit (Aenderung 5) =================================
+
+# Feste Reihenfolge der drei handelbaren Bestaende (Determinismus der Fluesse).
+_TRADE_RESOURCES: tuple[str, ...] = ("getreide", "eisen", "gold")
+
+
+def trade(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """Benachbarte Nationen tauschen Ueberschuss gegen Defizit; daraus waechst Abhaengigkeit.
+
+    Rein und deterministisch, **ohne** RNG: fuer jede der drei Ressourcen fliesst
+    Ueberschuss (Bestand ueber dem Bedarf) zu Defizit (Bestand unter dem Bedarf)
+    entlang der Grenz-Kanten des Adjazenzgraphen (bis ``trade_max_distance``
+    Spruenge, mit Distanz-Daempfung). Der Fluss ist reine **Umverteilung** — je
+    Ressource bleibt die Weltsumme erhalten (keine Erzeugung aus dem Nichts).
+    ``favor`` steuert die Praeferenz (offene Feinde handeln nicht, Freunde mehr);
+    keine Nation gibt unter ihren eigenen Bedarf ab, keine nimmt ueber ihn hinaus.
+
+    Der Handel laeuft direkt nach der Produktion: importiertes Getreide kann noch
+    dieselbe Hungersnot abwenden, importiertes Eisen/Gold hebt noch dieses Jahr die
+    Schlagkraft. Aus den Fluessen wird die ``dependency`` der Beziehungs-Matrix
+    fortgeschrieben — der Stoff, aus dem "Krieg aus Handelsverflechtung" entsteht.
+    """
+    pids = sorted(world.polities)
+    if len(pids) < 2:
+        return world
+
+    dist = _trade_distances(world, pids, cfg)
+    need = {
+        pid: {r: _trade_need(world.polities[pid], r, cfg) for r in _TRADE_RESOURCES}
+        for pid in pids
+    }
+    have = {
+        pid: {r: getattr(world.polities[pid].stocks, r) for r in _TRADE_RESOURCES}
+        for pid in pids
+    }
+    # imported[b][r][a] = wie viel b in diesem Jahr von a an Ressource r erhielt.
+    imported: dict[EntityId, dict[str, dict[EntityId, float]]] = {
+        pid: {r: {} for r in _TRADE_RESOURCES} for pid in pids
+    }
+
+    for r in _TRADE_RESOURCES:
+        for a in pids:  # a als Exporteur seines Ueberschusses
+            if have[a][r] - need[a][r] <= cfg.trade_min_flow:
+                continue
+            for b in _trade_partners(world, a, pids, dist, cfg):
+                avail = have[a][r] - need[a][r]
+                if avail <= cfg.trade_min_flow:
+                    break  # Ueberschuss von a erschoepft
+                deficit = need[b][r] - have[b][r]
+                if deficit <= cfg.trade_min_flow:
+                    continue
+                scale = _trade_volume_scale(world, a, b, dist[(a, b)], cfg)
+                flow = cfg.trade_rate * min(avail, deficit) * scale
+                if flow <= cfg.trade_min_flow:
+                    continue
+                have[a][r] -= flow
+                have[b][r] += flow
+                imported[b][r][a] = imported[b][r].get(a, 0.0) + flow
+
+    for pid in pids:
+        h = have[pid]
+        pol = world.polities[pid]
+        pol.stocks = replace(
+            pol.stocks, getreide=h["getreide"], eisen=h["eisen"], gold=h["gold"]
+        )
+
+    _update_dependency(world, pids, need, imported, cfg)
+    return world
+
+
+def _trade_distances(
+    world: World, pids: list[EntityId], cfg: Config
+) -> dict[tuple[EntityId, EntityId], int]:
+    """Grenz-Sprung-Distanz zwischen Territorien (nur Paare <= ``trade_max_distance``).
+
+    Multi-Source-BFS ueber den Regionsgraphen von jedem Territorium aus: direkte
+    Nachbarn liegen bei Distanz 1, ein Land dazwischen bei 2 (Gueter transitieren).
+    Rein aus der Adjazenz — die Koordinaten bleiben kosmetisch. Distanz ist
+    symmetrisch; je gerichtetem Paar gespeichert fuer den direkten Zugriff.
+    """
+    max_d = cfg.trade_max_distance
+    dist: dict[tuple[EntityId, EntityId], int] = {}
+    for a in pids:
+        territory = world.polities[a].territory
+        hops: dict[EntityId, int] = {rid: 0 for rid in territory}
+        reached: dict[EntityId, int] = {}
+        frontier = sorted(territory)
+        d = 0
+        while frontier and d < max_d:
+            d += 1
+            nxt: list[EntityId] = []
+            for rid in frontier:
+                for nb in world.regions[rid].nachbarn:
+                    if nb in hops:
+                        continue
+                    hops[nb] = d
+                    nxt.append(nb)
+                    owner = world.regions[nb].owner
+                    if owner is not None and owner != a and owner not in reached:
+                        reached[owner] = d
+            frontier = sorted(nxt)
+        for b, hd in reached.items():
+            dist[(a, b)] = hd
+    return dist
+
+
+def _trade_need(pol: Polity, resource: str, cfg: Config) -> float:
+    """Jahresbedarf an einer handelbaren Ressource (Basis von Ueberschuss/Defizit).
+
+    Getreide ernaehrt die Bevoelkerung, Eisen ruestet die Soldaten, Gold besoldet
+    sie — dieselben Schwellen, die Hunger (``consumption``) und Schlagkraft
+    (``_power``) lesen. Gold traegt zusaetzlich eine unantastbare Schatz-Reserve,
+    damit der Handel den Expansions-Kriegskasten nicht wegspuelt.
+    """
+    if resource == "getreide":
+        return bevoelkerung(pol) * cfg.food_per_person
+    soldiers = _stratum_size(pol, StratumKind.SOLDAT)
+    if resource == "eisen":
+        return soldiers * cfg.iron_per_soldier
+    return soldiers * cfg.gold_per_soldier + cfg.trade_gold_reserve
+
+
+def _trade_partners(
+    world: World,
+    a: EntityId,
+    pids: list[EntityId],
+    dist: dict[tuple[EntityId, EntityId], int],
+    cfg: Config,
+) -> list[EntityId]:
+    """Handelspartner von a in Reichweite, nach Praeferenz sortiert (Determinismus).
+
+    Offene Feinde (``hostile``) sind ausgeschlossen — Krieg kappt den Handel. Sonst
+    zuerst die wohlgesonnensten (hoechster favor), bei Gleichstand die kleinste
+    ``EntityId``: so bekommt der bevorzugte Partner den knappen Ueberschuss zuerst.
+    """
+    partners = [
+        b for b in pids if b != a and (a, b) in dist and not hostile(world, a, b, cfg)
+    ]
+    partners.sort(key=lambda b: (-favor(world, a, b), b))
+    return partners
+
+
+def _trade_volume_scale(
+    world: World, a: EntityId, b: EntityId, hops: int, cfg: Config
+) -> float:
+    """Volumen-Faktor der Kante a -> b: Distanz-Daempfung mal favor-Praeferenz (0..1)."""
+    decay = cfg.trade_distance_decay ** (hops - 1)
+    preference = _clamp01(cfg.trade_favor_base + cfg.trade_favor_bias * favor(world, a, b))
+    return decay * preference
+
+
+def _update_dependency(
+    world: World,
+    pids: list[EntityId],
+    need: dict[EntityId, dict[str, float]],
+    imported: dict[EntityId, dict[str, dict[EntityId, float]]],
+    cfg: Config,
+) -> None:
+    """Schreibe ``dependency`` je Kante als zerfallende **Akkumulation** der Reliance fort.
+
+    Reliance-Fluss(b -> a) = groesster Anteil eines Jahresbedarfs von b, den a in
+    diesem Jahr deckte (imported/need, ueber die drei Ressourcen das Maximum). Die
+    dependency akkumuliert diesen Fluss und zerfaellt zugleich:
+
+        dep' = clamp01( dep * (1 - decay) + reliance_fluss )
+
+    So baut *anhaltende* Lieferung eine echte, bleibende Abhaengigkeit auf (ein
+    Zufluss von decay je Jahr saettigt sie), waehrend das Ausbleiben der Lieferung
+    sie ueber Jahre zerfallen laesst — genau das Fenster, in dem "Krieg aus
+    Handelsverflechtung" gegen den nun gekappten Lieferanten entsteht. Dieselbe
+    akkumulierende Gedaechtnis-Struktur wie ``favor`` (Aenderung 3), nur ohne
+    Vorzeichen. Nur nach (a,b) sortiert iteriert (Matrix-Determinismus); winzige
+    Werte schnappen auf 0, damit die neutrale Kante entfallen kann (sparse).
+    """
+    reliance: dict[tuple[EntityId, EntityId], float] = {}
+    for b in pids:
+        for r in _TRADE_RESOURCES:
+            need_r = need[b][r]
+            if need_r <= cfg.trade_min_flow:
+                continue
+            for a, amount in imported[b][r].items():
+                key = (b, a)
+                reliance[key] = max(reliance.get(key, 0.0), amount / need_r)
+
+    for key in sorted(set(world.relations) | set(reliance)):
+        old = world.relations.get(key)
+        old_dep = old.dependency if old is not None else 0.0
+        new_dep = _clamp01(old_dep * (1.0 - cfg.dependency_decay) + reliance.get(key, 0.0))
+        if new_dep < cfg.dependency_epsilon:
+            new_dep = 0.0
+        if old is None:
+            if new_dep > 0.0:
+                world.relations[key] = Relation(dependency=new_dep)
+        elif new_dep != old.dependency:
+            world.relations[key] = replace(old, dependency=new_dep)
+
+
+def _supplier_risk(world: World, a: EntityId, y: EntityId, cfg: Config) -> float:
+    """Wie gefaehrlich es ist, von Y abzuhaengen: Misstrauen (neg. favor) + Y's Unruhe.
+
+    Ein feindlicher Lieferant kann die Versorgung als Waffe einsetzen, ein innerlich
+    instabiler kann sie unfreiwillig verlieren — beides macht die Abhaengigkeit
+    riskant und den Griff nach der eigenen Quelle rational (0..1).
+    """
+    distrust = max(0.0, -favor(world, a, y))
+    instability = _volksgroll(world.polities[y], cfg)
+    return _clamp01(distrust + instability)
 
 
 def demografie(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
@@ -628,13 +852,22 @@ def _score_ressource_sichern(
     Ressourcenlage**. Der stehende Antrieb ist die *Landnot* (Bevoelkerung gegen
     Tragfaehigkeit), nicht die akute Hungersnot: wer schon verhungert, ist zu
     geschwaecht zum Erobern und zieht sich zurueck (UEBERLEBEN). Hunger und
-    Eisenbedarf verstaerken; die Fruchtbarkeit des erreichbaren Feldes waehlt das Ziel.
+    Eisenbedarf verstaerken; die Fruchtbarkeit des erreichbaren Feldes waehlt das
+    Ziel. Ein weiterer Mangel ist die **Handelsabhaengigkeit** (Aenderung 5): von
+    einem feindlichen/instabilen Lieferanten abhaengig zu sein, treibt gezielt den
+    Krieg gegen genau diesen Lieferanten — so entsteht Krieg aus Handelsverflechtung.
     """
     pol = world.polities[pid]
     pressure = _land_pressure(world, pol, cfg)
     hunger = _hunger(pol, cfg)
     iron_gap = _iron_gap(pol, cfg)
-    if pressure <= 0.0 and hunger <= 0.0 and iron_gap <= 0.0:
+    # Eine riskante Abhaengigkeit oeffnet das Ziel auch ohne rohen Eigenmangel:
+    # von einem gefaehrlichen Lieferanten abzuhaengen IST ein zu deckender Mangel.
+    dependence = max(
+        (dependency(world, pid, y) * _supplier_risk(world, pid, y, cfg) for y in targets),
+        default=0.0,
+    )
+    if pressure <= 0.0 and hunger <= 0.0 and iron_gap <= 0.0 and dependence <= 0.0:
         return None
 
     et = _effective_traits(world, pol)
@@ -651,6 +884,15 @@ def _score_ressource_sichern(
         decision.add(FactorLabel.RESSOURCENDRUCK, cfg.goal_seize_weight * pressure)
         decision.add(FactorLabel.NAHRUNGSDEFIZIT, cfg.goal_famine_weight * hunger)
         decision.add(FactorLabel.EISENBEDARF, cfg.goal_iron_weight * iron_gap)
+        # Der gezielte Faktor: Abhaengigkeit von genau diesem Nachbarn, gewichtet
+        # mit seiner Gefaehrlichkeit (Misstrauen + Unruhe). Null (und damit aus der
+        # Begruendung) fuer jeden Nicht-Lieferanten.
+        decision.add(
+            FactorLabel.HANDELSABHAENGIGKEIT,
+            cfg.goal_dependency_weight
+            * dependency(world, pid, y)
+            * _supplier_risk(world, pid, y, cfg),
+        )
         decision.add(FactorLabel.BEUTE, cfg.goal_prize_weight * _prize(world, pid, prize, cfg))
         decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
         decision.add(FactorLabel.MILITAERVORTEIL, _advantage(world, pid, y, powers, cfg))

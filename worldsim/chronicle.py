@@ -412,7 +412,12 @@ def _narrate(world: World, event: Event, log: EventLog) -> str:
         case EventKind.KRIEG:
             target = _nation_name(world, event.subjects[1])
             drivers = _format_top_factors(event)
-            verb = "declared a war of faith on" if _is_faith_war(event) else "declared war on"
+            if _is_faith_war(event):
+                verb = "declared a war of faith on"
+            elif _is_trade_war(event):
+                verb = "declared a trade war on"
+            else:
+                verb = "declared war on"
             return (
                 f"Year {event.year}: {nation} {verb} {target}, "
                 f"driven by {drivers}."
@@ -548,6 +553,19 @@ def _is_faith_war(event: Event, limit: int = 3) -> bool:
         (f for f in event.factors if f.weight > 0.0), key=lambda f: f.weight, reverse=True
     )[:limit]
     return any(f.label == FactorLabel.GLAUBENSGRABEN for f in drivers)
+
+
+def _is_trade_war(event: Event, limit: int = 3) -> bool:
+    """Ein Krieg aus Handelsverflechtung: die Handelsabhaengigkeit war ein Hauptantrieb.
+
+    Wie beim Glaubenskrieg zaehlen die **treibenden** (positiven) Faktoren: liegt
+    die Handelsabhaengigkeit unter ihren groessten, war die Abhaengigkeit vom Gegner
+    (dem Lieferanten) ein Hauptmotiv — nicht bloss ein Randbeitrag (Aenderung 5).
+    """
+    drivers = sorted(
+        (f for f in event.factors if f.weight > 0.0), key=lambda f: f.weight, reverse=True
+    )[:limit]
+    return any(f.label == FactorLabel.HANDELSABHAENGIGKEIT for f in drivers)
 
 
 def _schisma_cause(log: EventLog, event: Event) -> Event | None:

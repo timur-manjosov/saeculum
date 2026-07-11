@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 10
+    config_version: int = 11
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -56,10 +56,14 @@ class Config:
     # (Liebigsches Minimum) — die Guns-versus-Butter-Kopplung.
     workers_per_capacity: float = 5.0
     # Einfache Foerderung je beanspruchter Region: Eisen (Waffen/Werkzeug) und
-    # Gold (Schatz). Bewusst schlicht — die reiche Kopplung folgt in spaeteren
-    # Aenderungen (Handel, Schichtung).
-    iron_per_region: float = 1.0
+    # Gold (Schatz). Gold entsteht ueberall; Eisen nur in Regionen mit Vorkommen
+    # (siehe ``Region.iron_rich``), daher hier je *eisenreicher* Region.
+    iron_per_region: float = 2.0
     gold_per_region: float = 2.0
+    # Aenderung 5: Anteil der Regionen mit Eisenvorkommen (Eisen ist nicht ueberall
+    # — die Quelle der Handelsabhaengigkeit). Der Foerdersatz oben ist erhoeht, damit
+    # die Welt-Eisenmenge grob erhalten bleibt (nur die Verteilung wird ungleich).
+    iron_region_fraction: float = 0.5
     # Jaehrliche Ernteschwankung: +/- Anteil um die Kapazitaet (Hunger-Quelle).
     harvest_variance: float = 0.30
 
@@ -133,6 +137,49 @@ class Config:
     goal_coalition_weight: float = 1.4
     goal_courtship_favor: float = 0.10
     goal_loyalty_weight: float = 0.2
+
+    # --- Aenderung 5: Handel und Abhaengigkeit -----------------------------
+    # Benachbarte Nationen mit Ueberschuss/Defizit tauschen Getreide/Eisen/Gold
+    # entlang der Beziehungskanten. Die Fluesse sind reine Umverteilung je
+    # Ressource (Erhaltung: keine Erzeugung aus dem Nichts) — der Reichtum
+    # entsteht aus dem Netz und der daraus wachsenden Abhaengigkeit, nicht aus
+    # einem modellierten Preis (Ockham: kein Wirtschafts-Solver).
+    # Anteil des passenden Ueberschuss/Defizit-Minimums, der je Jahr fliesst.
+    trade_rate: float = 0.25
+    # Reichweite in Grenz-Spruengen: 1 = nur direkte Nachbarn, 2 = ein Land
+    # dazwischen (Gueter transitieren). Bindet Handel an die Adjazenz, nicht an
+    # die (nur kosmetischen) Koordinaten.
+    trade_max_distance: int = 2
+    # Volumen-Daempfung je zusaetzlichem Sprung (Distanz 1 voll, 2 -> x decay).
+    trade_distance_decay: float = 0.5
+    # favor skaliert das Volumen (Handel bevorzugt bei positivem favor):
+    # scale = clamp01(base + bias*favor). Offene Feinde (hostile) handeln nicht.
+    # Die Praeferenz ist bewusst mild: auch neutrale und leicht verstimmte
+    # Nachbarn handeln, sonst baute sich Abhaengigkeit nur zu Freunden auf (die
+    # spaeter Verbuendete werden und nie angegriffen) — der gefaehrliche Fall ist
+    # gerade die Abhaengigkeit von einem Rivalen (Konzept §4: "von Rivale").
+    trade_favor_base: float = 0.6
+    trade_favor_bias: float = 0.5
+    # Fluesse unter dieser Schranke werden ignoriert (kein Rauschen).
+    trade_min_flow: float = 1e-6
+    # Gold ist Schatz, nicht bloss Ware: diese Reserve bleibt vom Handel
+    # unberuehrt, damit der Expansions-Kriegskasten erhalten bleibt
+    # (Handels-Bedarf an Gold = Sold der Soldaten + Reserve).
+    trade_gold_reserve: float = 15.0
+    # dependency (Anteil des von B gedeckten Bedarfs) steigt auf die aktuelle
+    # Angewiesenheit und zerfaellt, sobald die Lieferung ausbleibt — so ueberlebt
+    # eine gewachsene Abhaengigkeit das Kappen der Lieferung um einige Jahre: das
+    # Fenster, in dem "Krieg aus Handelsabhaengigkeit" entsteht.
+    dependency_decay: float = 0.10
+    # Winzige dependency schnappt auf 0 (die sparse Matrix kann die Kante droppen).
+    dependency_epsilon: float = 0.02
+    # Utility (Aenderung 4): hohe Abhaengigkeit von einem feindlichen/instabilen
+    # Lieferanten hebt das Ziel RESSOURCE_SICHERN (benannter Faktor
+    # Handelsabhaengigkeit) — so wird der Handelskrieg emergent statt geskriptet.
+    # Gewichtet so, dass eine ausgepraegte Abhaengigkeit (dep ~0.7) von einem
+    # riskanten Lieferanten (risk ~0.4) die Wahl kippen kann, eine beilaeufige aber
+    # nur mittraegt.
+    goal_dependency_weight: float = 4.0
 
     # --- expansion: Anspruch auf ein angrenzendes freies Feld --------------
     expand_gold_cost: float = 15.0

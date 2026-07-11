@@ -197,8 +197,11 @@ class Relation:
     ``favor`` ist akkumuliertes Wohlwollen (+) bzw. Groll (-) und zerfaellt ueber
     Jahrzehnte Richtung 0 (Vergebung). Buendnis und Feindschaft sind KEINE
     gespeicherten Flags: sie werden pro Tick aus ``favor`` abgeleitet (siehe
-    ``systems.allied``/``systems.hostile``). ``dependency`` (wie stark a auf b's
-    Ressourcen angewiesen ist) bleibt 0.0, bis der Handel sie fuellt (Aenderung 5).
+    ``systems.allied``/``systems.hostile``). ``dependency`` (Anteil des Bedarfs
+    von a, den b's Lieferungen decken, 0..1) fuellt der Handel (Aenderung 5): sie
+    steigt auf die aktuelle Angewiesenheit und zerfaellt, sobald die Lieferung
+    ausbleibt. Eine Kante existiert, solange ``favor`` ODER ``dependency`` von 0
+    verschieden ist (sonst ist sie neutral und entfaellt — sparse Matrix).
     """
 
     favor: float = 0.0
@@ -216,6 +219,10 @@ class Region:
     id: EntityId
     name: str = ""
     food_capacity: float = 0.0
+    # Aenderung 5: Eisen ist "oft nicht lokal" (Konzept §2.2) — nur ein Teil der
+    # Regionen traegt ein Vorkommen. Eisenarme Nationen muessen Eisen importieren
+    # (Handelsabhaengigkeit), notfalls vom Rivalen — die Wurzel des Handelskriegs.
+    iron_rich: bool = False
     # Adjazenz/Distanz fuer Handel & Krieg = Grenzen.
     nachbarn: tuple[EntityId, ...] = ()
     owner: EntityId | None = None

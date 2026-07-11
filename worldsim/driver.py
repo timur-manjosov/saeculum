@@ -44,6 +44,7 @@ from worldsim.systems import (
     production,
     research,
     ruler,
+    trade,
 )
 
 __all__ = ["SYSTEMS", "simulate", "worldgen"]
@@ -58,6 +59,11 @@ SYSTEMS: list[tuple[str, System]] = [
     # Effizienz und Schlagkraft.
     ("research", research),
     ("production", production),
+    # Handel gleich nach der Produktion (Aenderung 5): frisch geernteter/gefoerderter
+    # Ueberschuss fliesst entlang der Grenzen zu Defizit-Nachbarn — importiertes
+    # Getreide wendet noch DIESE Hungersnot ab, Eisen/Gold heben noch dieses Jahr die
+    # Schlagkraft, und die entstehende Abhaengigkeit speist die spaetere Zielwahl.
+    ("trade", trade),
     ("consumption", consumption),
     # Demografie: Wachstum/Schrumpfung je Schicht + Rekrutierung; danach der Groll-
     # Aufbau (liest das frische Nahrungsdefizit und die Wohlstandsanteile).
@@ -183,6 +189,9 @@ def worldgen(master: Rng, cfg: Config) -> World:
     # Ziehungen (Kapazitaeten, Adjazenz, Hauptstaedte, Traits) unveraendert — der
     # Lauf ist byte-identisch zu vorher, nur um Koordinaten reicher.
     _place_regions(regions, gen)
+    # Eisenvorkommen ganz zuletzt verteilen (wie die Lage), damit alle vorherigen
+    # Ziehungen unveraendert bleiben und die Welt nur die Eisen-Geografie gewinnt.
+    _assign_iron_deposits(regions, gen, cfg)
 
     return World(
         year=0,
@@ -236,6 +245,20 @@ def _place_regions(regions: dict[EntityId, Region], gen: Stream) -> None:
     """
     for rid in sorted(regions):
         regions[rid].coord = (gen.random(), gen.random())
+
+
+def _assign_iron_deposits(
+    regions: dict[EntityId, Region], gen: Stream, cfg: Config
+) -> None:
+    """Verteile Eisenvorkommen auf einen Teil der Regionen (Eisen ist nicht ueberall).
+
+    Konzept §2.2: Eisen ist "oft nicht lokal". Nur ``iron_region_fraction`` der
+    Regionen traegt ein Vorkommen; eisenarme Nationen muessen es importieren
+    (Handelsabhaengigkeit) oder erobern. Semantische Ziehung (Verhalten haengt
+    daran), stabil nach id sortiert — Teil des Determinismus-Vertrags.
+    """
+    for rid in sorted(regions):
+        regions[rid].iron_rich = gen.random() < cfg.iron_region_fraction
 
 
 def simulate(

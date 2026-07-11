@@ -52,16 +52,17 @@ def _assert_world_invariants(world: World, cfg: Config) -> None:
     claimed = sum(len(p.territory) for p in world.polities.values())
     assert claimed <= cfg.num_regions
 
-    # Aenderung 3: die Beziehungs-Matrix ist sparse und gueltig — gerichtete
-    # Kanten zwischen existierenden Nationen, favor im Bereich, dependency ruht
-    # (0.0) bis zum Handel (Aenderung 5). Buendnis/Feindschaft sind abgeleitet,
-    # keine gespeicherten Flags (siehe test_relations).
+    # Aenderung 3/5: die Beziehungs-Matrix ist sparse und gueltig — gerichtete
+    # Kanten zwischen existierenden Nationen, favor in [-1,1], dependency in [0,1]
+    # (vom Handel gefuellt, Aenderung 5). Buendnis/Feindschaft sind abgeleitet,
+    # keine gespeicherten Flags (siehe test_relations); die Sparseness selbst
+    # (neutrale Kanten verblassen) prueft test_relations ueber die Zeit.
     for (a, b), rel in world.relations.items():
         assert a != b
         assert a in world.polities
         assert b in world.polities
         assert -1.0 <= rel.favor <= 1.0
-        assert rel.dependency == 0.0
+        assert 0.0 <= rel.dependency <= 1.0
 
     # Aenderung 4: jede etablierte Nation traegt am Tick-Ende ein Ziel aus dem
     # festen Menue. Nur eine im laufenden Jahr entstandene Nation (Abspaltung)
