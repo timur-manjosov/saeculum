@@ -29,6 +29,7 @@ __all__ = [
     "Stocks",
     "Stratum",
     "StratumKind",
+    "Tension",
     "Traits",
     "World",
 ]
@@ -172,6 +173,27 @@ class Stratum:
     wealth_share: float = 0.0
 
 
+@dataclass(frozen=True)
+class Tension:
+    """Der Spannungszustand einer Nation: vier benannte Druecke (Aenderung 6).
+
+    Reiner Wert, je Tick von ``systems.spannung`` neu berechnet — dieselben vier
+    Zahlen, die als ``Factor``-Liste an einer Entladung haengen (die Faktoren SIND
+    die Begruendung, es gibt keine zweite Rechnung). Bereits **gewichtet**, damit
+    ihre Summe der Spannungs-Score und die groesste von ihnen die dominante
+    Komponente ist (sie waehlt die Art der Entladung).
+
+    Angelehnt an die Strukturell-Demografische Theorie: Volksdruck (Verelendung),
+    Elitendruck (Eliten-Ueberproduktion), Fiskaldruck (Staatsfinanzen), Aussendruck
+    (Abhaengigkeit und Einkreisung).
+    """
+
+    volk: float = 0.0
+    elite: float = 0.0
+    fiskal: float = 0.0
+    aussen: float = 0.0
+
+
 class GoalKind(StrEnum):
     """Das feste, kleine Zielmenue einer Nation (Aenderung 4).
 
@@ -286,6 +308,18 @@ class Polity:
     # Tick einer Nation). Es traegt die Wahl in Systeme, die frueher im Tick
     # laufen als die Zielwahl selbst (siehe ``systems._recruit``).
     goal: GoalKind | None = None
+
+    # --- Aenderung 6: der Spannungszustand ---------------------------------
+    # Transient: die vier je Tick neu berechneten Druecke (siehe ``systems.spannung``).
+    # Ueberschreitet ihre Summe die Schwelle, entlaedt sich die Spannung; die
+    # groesste Komponente waehlt die Art. ``goals`` liest den Aussendruck, weil
+    # dessen Entladung nach aussen geht (Krieg) statt nach innen.
+    tension: Tension = field(default_factory=Tension)
+    # Jahr der letzten Entladung. Danach ist die Nation eine Weile refraktaer: eine
+    # eben erschuetterte Gesellschaft bricht nicht im naechsten Jahr erneut, der Druck
+    # muss sich erst wieder aufbauen. Das ist es, was aus dem Auf und Ab einen ZYKLUS
+    # macht statt eines Dauerflackerns (vgl. ``last_war``).
+    last_crisis: int = -10_000
 
     # --- Phase 3: Herrscher ------------------------------------------------
     # Aktueller Herrscher: Verweis (id) in ``World.rulers``. Im laufenden Tick

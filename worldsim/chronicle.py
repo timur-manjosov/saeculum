@@ -162,6 +162,20 @@ def wichtigkeit(
             factors = (Factor(FactorLabel.THRONFOLGE, 3.5 if turning else 2.5),)
         case EventKind.ABSPALTUNG:
             factors = (Factor(FactorLabel.FRAGMENTIERUNG, 4.5),)
+        case EventKind.AUFSTAND:
+            deaths = _population_loss(event.effects)
+            factors = (Factor(FactorLabel.INNERE_KRISE, 3.5 + deaths / 60.0),)
+        case EventKind.PUTSCH:
+            factors = (Factor(FactorLabel.INNERE_KRISE, 3.5),)
+        case EventKind.BANKROTT:
+            factors = (Factor(FactorLabel.INNERE_KRISE, 3.0),)
+        case EventKind.KOLLAPS:
+            # Der Zerfall eines Reiches in Nachfolgestaaten: das groesste innere
+            # Ereignis, das die Welt kennt.
+            factors = (
+                Factor(FactorLabel.INNERE_KRISE, 3.0),
+                Factor(FactorLabel.FRAGMENTIERUNG, 5.0),
+            )
         case EventKind.KONVERSION:
             factors = (Factor(FactorLabel.BEKEHRUNG, 3.0),)
         case EventKind.SCHISMA:
@@ -416,6 +430,9 @@ def _narrate(world: World, event: Event, log: EventLog) -> str:
                 verb = "declared a war of faith on"
             elif _is_trade_war(event):
                 verb = "declared a trade war on"
+            elif _is_pressure_war(event):
+                # Aenderung 6: der Krieg IST die Entladung des Aussendrucks.
+                verb = "sought escape from its mounting crisis in war on"
             else:
                 verb = "declared war on"
             return (
@@ -458,7 +475,39 @@ def _narrate(world: World, event: Event, log: EventLog) -> str:
             return line + (" A turning point." if turning else "")
         case EventKind.ABSPALTUNG:
             breakaway = _nation_name(world, event.subjects[1])
+            if _driven_by(event, FactorLabel.ELITENDRUCK):
+                # Aenderung 6: die ueberzaehlige Elite nimmt sich ihren eigenen Staat.
+                return (
+                    f"Year {event.year}: the surplus nobility of {nation} broke away "
+                    f"and founded {breakaway}."
+                )
             return f"Year {event.year}: {breakaway} broke away from {nation}."
+        case EventKind.AUFSTAND:
+            deaths = _population_loss(event.effects)
+            gave = _wealth_redistributed(event.effects)
+            return (
+                f"Year {event.year}: an uprising convulsed {nation}, costing {deaths} "
+                f"lives and forcing the elite to yield {gave:.0%} of its wealth."
+            )
+        case EventKind.PUTSCH:
+            ruler = _ruler_name(world, event.subjects[1]) if len(event.subjects) > 1 else "?"
+            return (
+                f"Year {event.year}: the overgrown nobility of {nation} overthrew "
+                f"{ruler} and purged its rivals."
+            )
+        case EventKind.BANKROTT:
+            disbanded = _soldiers_disbanded(event.effects)
+            return (
+                f"Year {event.year}: {nation} went bankrupt and disbanded "
+                f"{disbanded} soldiers it could no longer pay."
+            )
+        case EventKind.KOLLAPS:
+            heirs = len(event.subjects) - 1
+            states = "successor state" + ("s" if heirs != 1 else "")
+            return (
+                f"Year {event.year}: {nation} collapsed under pressures it could no "
+                f"longer contain, shattering into {heirs} {states}."
+            )
         case EventKind.KONVERSION:
             faith = _identity_name(world, event.subjects[1])
             return f"Year {event.year}: {nation} converted to the {faith} faith."
@@ -542,30 +591,53 @@ def _identity_name(world: World, iid: EntityId) -> str:
     return ident.name if ident else f"faith#{iid}"
 
 
-def _is_faith_war(event: Event, limit: int = 3) -> bool:
-    """Ein Krieg ist ein Glaubenskrieg, wenn Glaubensreibung ein Hauptantrieb war.
+def _is_faith_war(event: Event) -> bool:
+    """Ein Krieg ist ein Glaubenskrieg, wenn Glaubensreibung ein Hauptantrieb war."""
+    return _driven_by(event, FactorLabel.GLAUBENSGRABEN)
 
-    Massstab sind die **treibenden** (positiven) Faktoren: liegt der
-    Glaubensgraben unter ihren groessten, war der fremde Glaube ein Hauptmotiv
-    (nicht bloss ein Randbeitrag neben Aggression und Grenzreibung).
+
+def _is_trade_war(event: Event) -> bool:
+    """Ein Krieg aus Handelsverflechtung: die Abhaengigkeit vom Gegner trieb ihn (Aenderung 5)."""
+    return _driven_by(event, FactorLabel.HANDELSABHAENGIGKEIT)
+
+
+def _is_pressure_war(event: Event) -> bool:
+    """Ein Krieg als Entladung des Aussendrucks (Aenderung 6).
+
+    Die Spannung stand ueber der Schwelle und ihr staerkster Druck kam von aussen —
+    die Nation MUSSTE nach aussen handeln. Der Krieg ist dann kein Griff nach Beute,
+    sondern das Ventil einer Krise.
+    """
+    return _driven_by(event, FactorLabel.AUSSENDRUCK)
+
+
+def _driven_by(event: Event, label: str, limit: int = 3) -> bool:
+    """War ``label`` einer der staerksten TREIBENDEN (positiven) Faktoren?
+
+    Der gemeinsame Massstab von ``_is_faith_war``/``_is_trade_war`` und der
+    Entladungs-Narration: ein Randbeitrag benennt das Ereignis nicht, ein Hauptantrieb
+    schon.
     """
     drivers = sorted(
         (f for f in event.factors if f.weight > 0.0), key=lambda f: f.weight, reverse=True
     )[:limit]
-    return any(f.label == FactorLabel.GLAUBENSGRABEN for f in drivers)
+    return any(f.label == label for f in drivers)
 
 
-def _is_trade_war(event: Event, limit: int = 3) -> bool:
-    """Ein Krieg aus Handelsverflechtung: die Handelsabhaengigkeit war ein Hauptantrieb.
+def _wealth_redistributed(effects: tuple[Effect, ...]) -> float:
+    """Wieviel Wohlstandsanteil die Elite im Aufstand abgeben musste."""
+    for effect in effects:
+        if effect.field == "elite_wealth":
+            return max(0.0, float(effect.before) - float(effect.after))  # type: ignore[arg-type]
+    return 0.0
 
-    Wie beim Glaubenskrieg zaehlen die **treibenden** (positiven) Faktoren: liegt
-    die Handelsabhaengigkeit unter ihren groessten, war die Abhaengigkeit vom Gegner
-    (dem Lieferanten) ein Hauptmotiv — nicht bloss ein Randbeitrag (Aenderung 5).
-    """
-    drivers = sorted(
-        (f for f in event.factors if f.weight > 0.0), key=lambda f: f.weight, reverse=True
-    )[:limit]
-    return any(f.label == FactorLabel.HANDELSABHAENGIGKEIT for f in drivers)
+
+def _soldiers_disbanded(effects: tuple[Effect, ...]) -> int:
+    """Wieviele Soldaten der Bankrott entliess."""
+    for effect in effects:
+        if effect.field == "soldiers":
+            return int(float(effect.before) - float(effect.after))  # type: ignore[arg-type]
+    return 0
 
 
 def _schisma_cause(log: EventLog, event: Event) -> Event | None:

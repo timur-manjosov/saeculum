@@ -9,10 +9,12 @@ allein — die Entladung kommt mit Aenderung 6).
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from worldsim.config import Config
 from worldsim.driver import simulate
-from worldsim.models import Polity, Stratum, StratumKind
+from worldsim.models import GoalKind, Polity, Stratum, StratumKind
 from worldsim.systems import bevoelkerung, initial_strata
 
 
@@ -79,13 +81,23 @@ def test_grievance_starts_at_zero_and_accumulates() -> None:
 
 
 def test_scarcity_raises_grievance() -> None:
-    """Getreidemangel treibt den Arbeiter-Groll klar ueber das Ungleichheits-Baseline."""
-    fertile = Config(
+    """Getreidemangel treibt den Arbeiter-Groll klar ueber das Ungleichheits-Baseline.
+
+    Geprueft wird der AUFBAU des Grolls (Aenderung 2), darum ist die Entladung hier
+    stillgelegt (unerreichbare Schwelle): sonst kappte der Aufstand in der kargen Welt
+    genau den Groll, den dieser Test messen will, und der Endstand saege niedriger aus
+    als in der satten. Dass der Mangel auch wirklich zu Aufstaenden fuehrt, prueft
+    ``test_tension.test_scarcity_breeds_uprisings``.
+    """
+    quiet = Config(tension_threshold=1e9)
+    fertile = replace(
+        quiet,
         region_food_capacity_min=40.0,
         region_food_capacity_max=60.0,
         harvest_variance=0.05,
     )
-    barren = Config(
+    barren = replace(
+        quiet,
         region_food_capacity_min=5.0,
         region_food_capacity_max=8.0,
         harvest_variance=0.9,
@@ -97,12 +109,24 @@ def test_scarcity_raises_grievance() -> None:
 
 
 def test_soldiers_track_the_target_share() -> None:
-    """Rekrutierung haelt den Soldaten-Anteil nahe am Zielwert (homoeostatisch)."""
+    """Rekrutierung haelt den Soldaten-Anteil nahe am Zielwert (homoeostatisch).
+
+    Der Zielwert ist nationsabhaengig: wer UEBERLEBEN verfolgt, schickt seine Soldaten
+    aufs Feld zurueck (``retrench_soldier_fraction``, Aenderung 4) — gegen den rohen
+    ``target_soldier_fraction`` zu pruefen, hiesse gegen die falsche Zahl zu pruefen.
+    Ausgenommen sind Nationen im Nachklang einer Entladung: der Bankrott entlaesst das
+    Heer mit ABSICHT (Aenderung 6), die Rekrutierung holt das ueber Jahre wieder auf.
+    """
     world, _ = simulate(seed=42, years=120)
     cfg = Config()
+    checked = 0
     for pol in world.polities.values():
         total = sum(s.size for s in pol.strata)
-        if total <= 0:
+        if total <= 0 or world.year - pol.last_crisis < cfg.crisis_cooldown_years:
             continue
-        soldier_fraction = _stratum(pol, StratumKind.SOLDAT).size / total
-        assert abs(soldier_fraction - cfg.target_soldier_fraction) < 0.05
+        target = cfg.target_soldier_fraction
+        if pol.goal is GoalKind.UEBERLEBEN:
+            target *= cfg.retrench_soldier_fraction
+        assert abs(_stratum(pol, StratumKind.SOLDAT).size / total - target) < 0.04
+        checked += 1
+    assert checked  # der Test darf nicht leer durchlaufen

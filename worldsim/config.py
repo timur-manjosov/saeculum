@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 11
+    config_version: int = 12
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -58,8 +58,11 @@ class Config:
     # Einfache Foerderung je beanspruchter Region: Eisen (Waffen/Werkzeug) und
     # Gold (Schatz). Gold entsteht ueberall; Eisen nur in Regionen mit Vorkommen
     # (siehe ``Region.iron_rich``), daher hier je *eisenreicher* Region.
+    # Die Gold-Foerderung ist mit Aenderung 6 angehoben, weil der Schatz seither
+    # einen echten Abfluss hat (Sold + Nothilfe): ohne die Anhebung erstickte die
+    # Expansion an ihrem Goldpreis.
     iron_per_region: float = 2.0
-    gold_per_region: float = 2.0
+    gold_per_region: float = 4.0
     # Aenderung 5: Anteil der Regionen mit Eisenvorkommen (Eisen ist nicht ueberall
     # — die Quelle der Handelsabhaengigkeit). Der Foerdersatz oben ist erhoeht, damit
     # die Welt-Eisenmenge grob erhalten bleibt (nur die Verteilung wird ungleich).
@@ -67,7 +70,7 @@ class Config:
     # Jaehrliche Ernteschwankung: +/- Anteil um die Kapazitaet (Hunger-Quelle).
     harvest_variance: float = 0.30
 
-    # --- consumption: Bevoelkerung isst Getreide ---------------------------
+    # --- consumption: Bevoelkerung isst Getreide, der Staat zahlt Gold ------
     food_per_person: float = 0.04
     # Bezug der Hungers-Not (siehe systems._hunger): fehlt dieser Bruchteil des
     # Jahresbedarfs, gilt die Not als total (Signal auf 1.0 gesaettigt).
@@ -75,6 +78,20 @@ class Config:
     # Getreide ist schlecht lagerbar: Vorrat ist auf diesen Bruchteil einer
     # Jahreskapazitaet begrenzt, damit schlechte Ernten Hunger ausloesen.
     food_storage_factor: float = 0.35
+    # Aenderung 6: Gold ist jetzt ein echter Bestand MIT Abfluss. Vorher wuchs der
+    # Schatz nur (ausser bei Erdbeben/Handel) — ein gold-basierter Druck waere tot
+    # geboren gewesen. Der Staat zahlt jaehrlich seine Pflichten (siehe
+    # ``systems._staatspflichten``): Sold je Soldat, Hof je Elite-Kopf, Nothilfe je
+    # Einheit Getreidedefizit. Was er nicht zahlen kann, IST der Fiskaldruck.
+    # Der Hof ist das entscheidende Glied: er waechst mit der Elite (Kriegsgewinner!),
+    # die Foerderung nur mit dem Territorium — so holt die Rechnung die Kasse ein.
+    gold_upkeep_per_soldier: float = 0.05
+    elite_gold_claim: float = 0.045
+    famine_relief_cost: float = 2.0
+    # Ueber so viele Jahre ist der Staat bereit, seinen Schatz fuer die laufenden
+    # Pflichten anzugreifen. Er bestimmt, wie viel Puffer eine gefuellte Kasse gegen
+    # den Fiskaldruck bietet (ein Erdbeben, das den Schatz frisst, nimmt ihn weg).
+    fiscal_buffer_years: float = 60.0
 
     # --- Demografie: logistisches Wachstum je Schicht ----------------------
     growth_rate: float = 0.08
@@ -180,6 +197,114 @@ class Config:
     # riskanten Lieferanten (risk ~0.4) die Wahl kippen kann, eine beilaeufige aber
     # nur mittraegt.
     goal_dependency_weight: float = 4.0
+
+    # --- Aenderung 6: der Spannungszustand und seine Entladung --------------
+    # Die Spannung einer Nation ist eine Summe von VIER benannten Druecken (je auf
+    # 0..1 normiert, dann gewichtet) — die Faktorliste IST die Begruendung. Ihre
+    # Gewichte legen fest, welcher Druck eine Nation eher zerreisst; ihre groesste
+    # Komponente waehlt die Art der Entladung.
+    # Was eine Elite traegt: Aemter (das Land) UND Pfruenden (die Mittel der Krone).
+    # Es bindet die knappere Schranke (Liebigsches Minimum, wie in ``production``) —
+    # die Elite braucht Rang UND Auskommen. Aemter je Region binden, wenn eine Nation
+    # Land VERLIERT (die Elite bleibt, die Posten gehen ⇒ die geschlagene oder
+    # gespaltene Nation bekommt prompt ihre Elitenkrise); die Pfruenden binden, wenn
+    # der Adel schneller waechst als die Mittel — der Kriegsgewinner-Adel von §3.3.
+    # Der Preis eines Kopfes ist ``elite_gold_claim`` (oben): dieselbe Zahl, die den
+    # Hof in den Staatspflichten kostet — der Anspruch des Adels ist EINE Groesse,
+    # nicht zwei.
+    elite_posts_per_region: float = 75.0
+    # Die Gewichte sind an den GEMESSENEN Spitzen der vier Rohdruecke geeicht (sie
+    # haben sehr verschiedene natuerliche Spannweiten: der Elitendruck reicht bis 1.0,
+    # der Aussendruck kaum ueber 0.5). Erst dadurch kann JEDER Druck die Dominanz
+    # gewinnen — sonst entlueden sich alle Krisen als derselbe Typ.
+    tension_volk_weight: float = 6.0  # Verelendung: Groll der unteren Schichten
+    tension_elite_weight: float = 3.6  # Eliten-Ueberproduktion
+    tension_fiskal_weight: float = 4.0  # Staatsfinanzen
+    tension_aussen_weight: float = 4.6  # Abhaengigkeit + Einkreisung
+    # Innerhalb des Aussendrucks: riskante Handels-Abhaengigkeit gegen Einkreisung
+    # (Anteil der Nachbarn in offener Feindschaft). Die Anteile summieren zu 1.
+    tension_dependency_share: float = 0.6
+    tension_grudge_share: float = 0.4
+    # Ab dieser Faktorsumme entlaedt sich die Spannung. Bewusst deutlich ueber dem
+    # ruhigen Grundpegel (~1.5), damit Druck sich erst ueber Jahrzehnte aufbaut:
+    # keine sofortige Explosion, aber auch keine flache Linie.
+    tension_threshold: float = 2.6
+    # Danach ist die Nation refraktaer: eine eben erschuetterte Gesellschaft bricht
+    # nicht schon im naechsten Jahr erneut. Diese Sperre ist es, die aus dem Auf und Ab
+    # einen ZYKLUS macht — ohne sie flackerte dieselbe Nation im Dreijahrestakt durch
+    # Putsche, statt Druck ueber Jahrzehnte aufzubauen und ihn dann zu brechen.
+    crisis_cooldown_years: int = 20
+
+    # Kollaps: nur wenn die Spannung EXTREM ist UND mehrere Druecke zugleich
+    # tragen (zusammengesetzte Krise) — dann waehlt keine einzelne Komponente mehr,
+    # das Reich zerfaellt in Nachfolgestaaten. Ein Druck allein, so hoch er auch
+    # steht, fuehrt nur zu seiner eigenen Entladung.
+    collapse_threshold: float = 3.6
+    collapse_component_floor: float = 0.15  # ab diesem ROHWERT traegt ein Druck mit
+    collapse_min_components: int = 3
+    collapse_max_successors: int = 2
+    # Ein Kollaps darf ein KLEINERES Reich zerreissen als eine gewoehnliche Abspaltung
+    # (``secession_min_territory``). Der Unterschied ist grundsaetzlich: eine Abspaltung
+    # nimmt einem Reich ein STUECK (es muss also gross genug sein, eines zu verlieren),
+    # ein Kollaps LOEST ES AUF — auch ein Zwei-Regionen-Staat kann in zwei zerfallen.
+    # Ohne diese eigene Schranke waere der Kollaps unerreichbar: die zusammengesetzte
+    # Extremkrise trifft gerade die kleinen, armen Reiche, nie die grossen bequemen.
+    collapse_min_territory: int = 2
+
+    # --- Entlastung und Folgewirkung je Entladung ---------------------------
+    # Prinzip (Konzept §3.3): jede Entladung ENTLASTET ihren eigenen Druck, saet
+    # aber einen anderen. So rotiert das System durch die Krisentypen (saekulare
+    # Zyklen), statt in einen Fixpunkt zu laufen.
+    #
+    # AUFSTAND (Volksdruck): der Groll entlaedt sich und Wohlstand wird umverteilt
+    # (das senkt auch die Ungleichheit, die den Groll naehrt) — aber der Schatz wird
+    # gepluendert (⇒ Fiskaldruck) und Soldaten/Elite bluten (⇒ schwaches Reich, die
+    # Nachbarn sehen die Bloesse).
+    revolt_grievance_relief: float = 0.35  # Restanteil des Grolls nach dem Aufstand
+    revolt_redistribution: float = 0.18  # Wohlstandsanteil, den die Elite abgibt
+    revolt_gold_loss: float = 0.50
+    revolt_elite_losses: float = 0.15
+    revolt_soldier_losses: float = 0.08
+    # PUTSCH (Elitendruck, unteilbares Reich): die siegreiche Faktion purgiert ihre
+    # Rivalen (⇒ Elitendruck faellt) und greift nach dem Wohlstand (⇒ Ungleichheit
+    # steigt ⇒ Volksdruck waechst). Der gestuerzte Herrscher stirbt; der Usurpator
+    # hat schwache Legitimitaet — die Sukzessionskrise kann das Reich spalten
+    # (Buergerkrieg), das erledigt die bestehende Fragmentierungs-Mechanik.
+    coup_elite_purge: float = 0.25
+    coup_wealth_grab: float = 0.04
+    # ABSPALTUNG (Elitendruck, teilbares Reich): die ueberzaehlige Elite nimmt sich
+    # ihren eigenen Staat. Sie ist unter den Auswanderern UEBERREPRAESENTIERT — genau
+    # das entlastet den Elitendruck der Mutter (eine proportionale Teilung wuerde
+    # Elite UND Aemter gleich halbieren und den Druck unveraendert lassen).
+    secession_elite_bias: float = 1.8
+    # BANKROTT (Fiskaldruck): der Staat entlaesst, was er nicht bezahlen kann — auf
+    # BEIDEN Seiten der Rechnung. Die Soldaten kehren aufs Feld zurueck; und das
+    # Gefolge, dessen Pfruende die Krone nicht mehr aufbringt, faellt aus dem Stand.
+    # Das zweite Glied ist das entscheidende: der Hof ist der GROESSTE Posten der
+    # Pflichten (rund die Haelfte), der Sold der kleinste (rund ein Zwoelftel) — ein
+    # Bankrott, der nur das Heer verkleinert, senkt seine eigene Rechnung um wenige
+    # Prozent und waere gar keine Entladung.
+    bankruptcy_demobilization: float = 0.35
+    bankruptcy_dismissal: float = 0.25  # Anteil des Hofes, der aus dem Stand faellt
+    # Bezahlt wird der Rest mit Zwangsabgaben, die den Groll heben (⇒ Volksdruck) —
+    # und mit einem entbloessten Heer (⇒ die Nachbarn wittern Beute).
+    bankruptcy_levy_grievance: float = 1.2
+    # KOLLAPS: das Reich zerfaellt; die alte Ordnung ist fort. Nachfolgestaaten und
+    # Rumpfstaat starten mit gebrochener Elite und weitgehend entladenem Groll.
+    collapse_grievance_relief: float = 0.25
+    collapse_elite_purge: float = 0.35
+    # KRIEG als Entladung des Aussendrucks: er ist die einzige Entladung, die nach
+    # AUSSEN geht — deshalb hat er keine eigene Art, sondern laeuft ueber die
+    # bestehende Zielwahl (Aenderung 4). Steht die Spannung ueber der Schwelle und
+    # dominiert der Aussendruck, legt dieser Zuschlag als benannter Faktor
+    # ``Aussendruck`` auf beide Kriegsziele — die Nation MUSS nach aussen handeln.
+    goal_crisis_weight: float = 1.2
+    # Kriegsgewinner-Eliten (Konzept §3.3): ein Sieg hebt Offiziere und Profiteure
+    # aus den Arbeitern in die Elite. Der Krieg loest die Knappheit — und saet die
+    # Eliten-Ueberproduktion, die als naechste Krise faellig wird. Es ist der einzige
+    # Kanal, der den Elite-Anteil HEBT; ohne ihn bliebe er exakt konstant und der
+    # Elitendruck eine flache Linie.
+    war_elite_promotion: float = 0.015
 
     # --- expansion: Anspruch auf ein angrenzendes freies Feld --------------
     expand_gold_cost: float = 15.0

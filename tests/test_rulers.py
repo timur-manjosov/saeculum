@@ -81,9 +81,20 @@ def test_fragmentation_creates_a_valid_new_nation() -> None:
 
 
 def test_fragmentation_is_caused_by_succession_caused_by_death() -> None:
-    """Aufgabe 5: Abspaltung ← Sukzession(-krise) ← Herrschertod (Kausalkette)."""
+    """Aufgabe 5: Abspaltung ← Sukzession(-krise) ← Herrschertod (Kausalkette).
+
+    Seit Aenderung 6 hat die ABSPALTUNG zwei Quellen: die Sukzessionskrise (hier) und
+    den Elitendruck (die ueberzaehlige Elite nimmt sich ihren eigenen Staat — die traegt
+    die Spannungs-Faktoren und wird in ``test_tension`` geprueft). Geprueft wird also
+    nur die Sukzessions-Kette; die andere Quelle hat gar keinen Herrschertod als Ursache.
+    """
     _, log = simulate(seed=42, years=200)
-    splits = [e for e in log if e.kind == EventKind.ABSPALTUNG]
+    splits = [
+        e
+        for e in log
+        if e.kind == EventKind.ABSPALTUNG
+        and not any(f.label == FactorLabel.ELITENDRUCK for f in e.factors)
+    ]
     assert splits
     for event in splits:
         succ = [log.get(c) for c in event.causes if log.get(c).kind == EventKind.SUKZESSION]

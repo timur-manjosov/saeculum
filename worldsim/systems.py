@@ -50,6 +50,7 @@ from worldsim.models import (
     Stocks,
     Stratum,
     StratumKind,
+    Tension,
     World,
 )
 from worldsim.names import make_name
@@ -78,6 +79,8 @@ __all__ = [
     "production",
     "research",
     "ruler",
+    "spannung",
+    "tension",
     "trade",
 ]
 
@@ -245,7 +248,6 @@ def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
         pol = world.polities[pid]
         efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
         harvest = rng.uniform(low, high)
-        regions = len(pol.territory)
         # Eisen entsteht nur in Regionen mit Vorkommen (Aenderung 5): eisenarme
         # Nationen muessen es importieren oder erobern — die Quelle der Abhaengigkeit.
         iron_regions = sum(1 for r in pol.territory if world.regions[r].iron_rich)
@@ -261,13 +263,20 @@ def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
             s,
             getreide=s.getreide + land * harvest * efficiency * labor,
             eisen=s.eisen + iron_regions * cfg.iron_per_region * efficiency,
-            gold=s.gold + regions * cfg.gold_per_region * efficiency,
+            gold=s.gold + _gold_income(pol, cfg),
         )
     return world
 
 
 def consumption(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Bevoelkerung isst Getreide; ueberschuessiger Vorrat verdirbt (gedeckelt)."""
+    """Bevoelkerung isst Getreide, der Staat zahlt seine Pflichten; Reste verderben.
+
+    Zwei Abfluesse, dieselbe Struktur: die Bevoelkerung isst (Rest verdirbt, Getreide
+    ist schlecht lagerbar), und der Schatz zahlt Sold und Nothilfe (Aenderung 6).
+    Damit ist Gold endlich ein echter Bestand mit Zu- UND Abfluss — vorher wuchs er
+    nur, und ein Fiskaldruck haette nie entstehen koennen. Was der Staat nicht zahlen
+    kann, bleibt ungezahlt; gemessen wird die Klemme in ``_fiskaldruck``.
+    """
     for pid in sorted(world.polities):
         pol = world.polities[pid]
         need = bevoelkerung(pol) * cfg.food_per_person
@@ -279,8 +288,44 @@ def consumption(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
             pol.food_deficit = need - getreide
             getreide = 0.0
         storage_cap = cfg.food_storage_factor * _land_capacity(world, pol, cfg)
-        pol.stocks = replace(pol.stocks, getreide=min(getreide, storage_cap))
+        gold = pol.stocks.gold
+        pol.stocks = replace(
+            pol.stocks,
+            getreide=min(getreide, storage_cap),
+            gold=gold - min(gold, _staatspflichten(pol, cfg)),
+        )
     return world
+
+
+def _gold_income(pol: Polity, cfg: Config) -> float:
+    """Jaehrliche Gold-Foerderung des Territoriums (die EINE Wahrheit darueber).
+
+    ``production`` foerdert sie, ``_fiskaldruck`` misst die Pflichten daran.
+    """
+    efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
+    return len(pol.territory) * cfg.gold_per_region * efficiency
+
+
+def _staatspflichten(pol: Polity, cfg: Config) -> float:
+    """Jaehrliche Pflichten des Staates in Gold: Sold + Hof + Nothilfe.
+
+    Die EINE Wahrheit darueber, was der Schatz zu tragen hat — ``consumption`` zahlt
+    danach, ``_fiskaldruck`` misst die Luecke daran. Drei Glieder, drei Kopplungen:
+
+    * **Sold** je Soldat — Ruestung kostet, und der Krieg treibt die Rekrutierung.
+    * **Hof** je Elite-Kopf — die Elite "verlangt Gold/Luxus" (Konzept §2.1). Dieses
+      Glied ist der Motor des saekularen Zyklus: die Elite waechst durch Kriegsgewinn,
+      die Foerderung waechst nur mit dem Territorium — also holt die Rechnung des Hofes
+      die Kasse irgendwann ein. Die Fiskalkrise kommt SPAET im Leben eines Reiches,
+      nach den siegreichen Kriegen, nicht am Anfang. Genau Turchin.
+    * **Nothilfe** je Einheit Getreidedefizit — Brot in der Hungersnot. Sie verknuepft
+      die Missernte mit den Staatsfinanzen: eine Hungersnot ist auch eine Fiskalkrise.
+    """
+    return (
+        _stratum_size(pol, StratumKind.SOLDAT) * cfg.gold_upkeep_per_soldier
+        + _stratum_size(pol, StratumKind.ELITE) * cfg.elite_gold_claim
+        + pol.food_deficit * cfg.famine_relief_cost
+    )
 
 
 # === Handel und Abhaengigkeit (Aenderung 5) =================================
@@ -596,6 +641,30 @@ def _recruit(pol: Polity, cfg: Config) -> None:
     )
 
 
+def _promote_elite(pol: Polity, rate: float) -> None:
+    """Hebe einen Anteil der Bevoelkerung aus den Arbeitern in die Elite (Aenderung 6).
+
+    Der zweite Kanal sozialer Mobilitaet neben ``_recruit`` — und der einzige, der den
+    Elite-Anteil HEBT (alle uebrigen senken ihn: Purge, Abspaltung, Deklassierung im
+    Bankrott). Ihn nutzt der Sieger eines Krieges (Kriegsgewinner-Adel, Konzept §3.3):
+    die Bevoelkerung bleibt gleich, aber sie schichtet sich um. Weil Aemter und Pfruenden
+    nicht mitwachsen, ist der frisch gewonnene Adel der Keim der naechsten Krise (siehe
+    ``_elitendruck``); zugleich fehlen die Befoerderten auf dem Feld (die Elite baut kein
+    Getreide an) — der Sieg hat einen Preis.
+    """
+    gain = min(rate * bevoelkerung(pol), _stratum_size(pol, StratumKind.ARBEITER))
+    if gain <= 0.0:
+        return
+    pol.strata = tuple(
+        replace(s, size=s.size - gain)
+        if s.kind == StratumKind.ARBEITER
+        else replace(s, size=s.size + gain)
+        if s.kind == StratumKind.ELITE
+        else s
+        for s in pol.strata
+    )
+
+
 def grievance(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     """Baue den Groll je Schicht auf; zerfalle sonst langsam. KEINE Entladung.
 
@@ -685,6 +754,664 @@ def diplomacy(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     _cooperate_against_hegemon(world, pids, strongest, cfg)
     _emit_alliance_flips(world, pids, strongest, cfg, log)
     return world
+
+
+# === Spannung und Entladung (Aenderung 6) ===================================
+
+# Deklarationsreihenfolge der vier Druecke. Sie bricht Gleichstaende bei der Wahl
+# der dominanten Komponente (Determinismus-Vertrag) und ist die Reihenfolge, in der
+# ``spannung`` die Faktorsumme akkumuliert (Float-Reproduzierbarkeit).
+_TENSION_ORDER: tuple[str, ...] = (
+    FactorLabel.VOLKSDRUCK,
+    FactorLabel.ELITENDRUCK,
+    FactorLabel.FISKALDRUCK,
+    FactorLabel.AUSSENDRUCK,
+)
+
+# Das Ereignis, das jeden Druck naehrt — zitiert wird es nur, wenn der Druck steht.
+_TENSION_CAUSE: dict[str, EventKind] = {
+    # Die Hungersnot ist es, die das Volk erzuernt.
+    FactorLabel.VOLKSDRUCK: EventKind.HUNGERSNOT,
+    # Der Krieg treibt die Elite — von BEIDEN Seiten: der Sieg schafft die Gewinner-
+    # Elite (``_promote_elite``), die Niederlage nimmt der bestehenden ihre Aemter
+    # (verlorenes Land). Darum zaehlt die Schlacht fuer Sieger wie Verlierer.
+    FactorLabel.ELITENDRUCK: EventKind.SCHLACHT,
+    # Das Erdbeben frisst den Schatz: der exogene Schock laeuft durch die Spannung.
+    FactorLabel.FISKALDRUCK: EventKind.ERDBEBEN,
+    # Die Reibung an der Grenze, die dem aeusseren Druck vorausgeht.
+    FactorLabel.AUSSENDRUCK: EventKind.GRENZREIBUNG,
+}
+
+
+def spannung(world: World, pol: Polity, cfg: Config, log: EventLog) -> Decision:
+    """Die Spannung einer Nation als Summe der VIER benannten Druecke (reine Funktion).
+
+    Nach der Strukturell-Demografischen Theorie — und damit keine undurchsichtige
+    Instabilitaets-Zahl, sondern eine Liste, die sagt, WORAN eine Zivilisation leidet:
+
+        Volksdruck   Groll der unteren Schichten (Getreidemangel + ungleicher
+                     Wohlstandsanteil naehren ihn; siehe ``grievance``)
+        Elitendruck  Eliten-Ueberproduktion: mehr Anwaerter als Aemter und Pfruenden
+        Fiskaldruck  Staatspflichten (Sold + Nothilfe) gegen die Mittel des Schatzes
+        Aussendruck  riskante Handels-Abhaengigkeit + Einkreisung durch offene Grolle
+
+    Jede Komponente ist auf 0..1 normiert, damit die Gewichte der Config vergleichbar
+    sind (dieselbe Disziplin wie in der Zielwahl). Die zurueckgegebene Faktorliste IST
+    die Begruendung: exakt sie haengt unveraendert an der Entladung. Ein Druck von 0
+    faellt heraus und nimmt seine Ursachen mit — er hat nichts erklaert; darum wird das
+    Log fuer ihn erst gar nicht durchsucht (die drei letzten stehen meist auf 0).
+    """
+    weights = _tension_weights(cfg)
+    decision = Decision()
+    for label, raw in (
+        (FactorLabel.VOLKSDRUCK, _volksgroll(pol, cfg)),
+        (FactorLabel.ELITENDRUCK, _elitendruck(pol, cfg)),
+        (FactorLabel.FISKALDRUCK, _fiskaldruck(pol, cfg)),
+        (FactorLabel.AUSSENDRUCK, _aussendruck(world, pol, cfg)),
+    ):
+        pressure = weights[label] * raw
+        if pressure == 0.0:
+            continue
+        decision.add(
+            label,
+            pressure,
+            causes=_recent_subject_event_all(
+                log, world.year, _TENSION_CAUSE[label], pol.id, cfg.cause_window_years
+            ),
+        )
+    return decision
+
+
+def tension(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """Berechne je Nation die Spannung; ueber der Schwelle entlaedt sie sich.
+
+    Der Kern von Aenderung 6: innere Umbrueche entstehen aus akkumuliertem Druck, der
+    an einer Schwelle bricht — nicht aus Zufalls-Triggern. Die DOMINANTE Komponente
+    waehlt die Art:
+
+        Volksdruck  ⇒ AUFSTAND   — Umverteilung
+        Elitendruck ⇒ ABSPALTUNG (teilbares Reich) oder PUTSCH (unteilbares)
+        Fiskaldruck ⇒ BANKROTT   — der Staat entlaesst, was er nicht bezahlen kann
+        Aussendruck ⇒ KRIEG      — die einzige Entladung nach AUSSEN; sie wird nicht
+                                   hier vollzogen, sondern von der Zielwahl (``goals``,
+                                   gleich danach im selben Tick). Die Spannung liefert
+                                   das Motiv als benannten Faktor, die Utility waehlt
+                                   das Ziel — es bleibt bei EINEM Kriegspfad.
+        extrem + zusammengesetzt ⇒ KOLLAPS — Zerfall in Nachfolgestaaten
+
+    Jede Entladung ENTLASTET ihren eigenen Druck und saet einen anderen (Konzept §3.3).
+    Darum rotiert das System durch die Krisentypen — saekulare Zyklen — statt in einen
+    Fixpunkt zu laufen. ``sorted`` liefert einen Snapshot: eine hier entstandene
+    Nachfolge-Nation kommt erst naechstes Jahr an die Reihe.
+    """
+    for pid in sorted(world.polities):
+        pol = world.polities[pid]
+        decision = spannung(world, pol, cfg, log)
+        # ``pol.tension`` ist die Lage, unter der die Nation in DIESEM Jahr handelt —
+        # dieselbe Rechnung, die auch das Entladungs-Event begruendet. Sie bleibt bis
+        # zur naechsten Bewertung stehen: der Zustand darf dem Event nicht widersprechen,
+        # und ein Verlauf, der den Gipfel wegkuerzt, zeigte die Krise nicht mehr, die er
+        # zeigen soll. Was die Entladung entlastet hat, sagt das naechste Jahr.
+        pol.tension = _tension_of(decision)
+        # Ohne Faktoren gibt es keine dominante Komponente — und nichts zu begruenden.
+        if decision.factors and decision.passes(cfg.tension_threshold):
+            _entlade(world, pol, decision, rng, cfg, log)
+    return world
+
+
+# --- die vier Druecke (je auf 0..1 normiert) ---------------------------------
+#
+# Volksdruck ist ``_volksgroll`` (groessengewichteter Groll der unteren Schichten):
+# dieselbe Groesse, die schon die Zielwahl und ``_supplier_risk`` lesen — es gibt kein
+# zweites Groll-Mass.
+
+
+def _kronmittel(pol: Polity, cfg: Config) -> float:
+    """Was die Krone in einem Jahr aufbringen kann: Foerderung + angezapfter Schatz.
+
+    Die EINE Wahrheit ueber die Mittel des Staates. Sie ist stets positiv (Territorium
+    foerdert Gold) — das ist wichtig: ein Mass, das mit dem Schatz auf 0 faellt, saette
+    jeden davon abgeleiteten Druck auf sein Maximum, egal wie klein Heer oder Adel
+    waeren. Der Schatz ist der Puffer, die Foerderung der Boden.
+    """
+    return _gold_income(pol, cfg) + pol.stocks.gold / cfg.fiscal_buffer_years
+
+
+def _elitendruck(pol: Polity, cfg: Config) -> float:
+    """Eliten-Ueberproduktion: Anteil der Elite ohne Amt und ohne Pfruende (0..1).
+
+    Eine Elite traegt zweierlei: die **Aemter**, die das Land hergibt, und die
+    **Pfruenden**, die die Krone aufbringen kann (``_kronmittel`` geteilt durch den
+    Anspruch eines Kopfes). Es bindet die knappere der beiden Schranken (Liebigsches
+    Minimum, wie in ``production``) — die Elite braucht Rang UND Auskommen.
+
+    Die Elite waechst mit der Bevoelkerung und durch Kriegsgewinn (siehe
+    ``_wage_war``); die Aemter wachsen nur mit dem Territorium, die Pfruenden nur mit
+    den Mitteln der Krone. Die Schere IST der Druck: verlorenes Land, versiegende
+    Mittel und siegreiche Kriege oeffnen sie — Purge, Abspaltung und Kollaps schliessen
+    sie wieder.
+    """
+    elite = _stratum_size(pol, StratumKind.ELITE)
+    if elite <= 0.0:
+        return 0.0
+    posts = len(pol.territory) * cfg.elite_posts_per_region
+    prebends = (
+        _kronmittel(pol, cfg) / cfg.elite_gold_claim if cfg.elite_gold_claim > 0.0 else 0.0
+    )
+    return _clamp01((elite - min(posts, prebends)) / elite)
+
+
+def _fiskaldruck(pol: Polity, cfg: Config) -> float:
+    """Fiskaldruck: wie weit die Staatspflichten die Mittel der Krone uebersteigen (0..1).
+
+    Ein struktureller Fehlbetrag ist der Druck. Weil er an den *Pflichten* haengt (nicht
+    am Kassenstand), senkt ihn der Bankrott SOFORT: entlassene Soldaten kosten keinen
+    Sold mehr. Und weil der Hof in den Pflichten steckt, senkt ihn auch der Putsch —
+    ein gestutzter Adel ist eine kleinere Rechnung. Die beiden inneren Krisen greifen
+    also ineinander, statt sich zu blockieren.
+    """
+    duty = _staatspflichten(pol, cfg)
+    if duty <= 0.0:
+        return 0.0
+    return _clamp01(1.0 - _kronmittel(pol, cfg) / duty)
+
+
+def _aussendruck(world: World, pol: Polity, cfg: Config) -> float:
+    """Aeusserer Druck: riskante Abhaengigkeit + Einkreisung durch offene Grolle (0..1).
+
+    Zwei Quellen, genau die des Konzepts (§3.1). (a) Von einem feindlichen oder
+    innerlich instabilen Lieferanten abzuhaengen — Aenderung 5 liefert beide Groessen.
+    (b) Die **Einkreisung**: der Anteil der Nachbarn, mit denen offene Feindschaft
+    besteht.
+
+    Die Einkreisung zaehlt Feinde (abgeleitet aus dem Groll der Matrix), NICHT die
+    Grenzreibung. Das ist ein Unterschied ums Ganze: Reibung waechst zwischen je zwei
+    Rivalen ohnehin und liegt bald dauerhaft an ihrer Obergrenze — sie waere ein
+    stehender Sockel, der die Spannung permanent nahe an die Schwelle druecken wuerde,
+    bis nur noch die Sperre die Krisen taktete. Feindschaft dagegen kommt und geht, weil
+    ``favor`` zerfaellt (die Vergebung): Einkreisung ist ein Zustand, aus dem man
+    wieder herauskommt — und damit ein Druck, der sich aufbauen UND abbauen kann.
+    """
+    pid = pol.id
+    reliance = max(
+        (
+            dependency(world, pid, y) * _supplier_risk(world, pid, y, cfg)
+            for y in sorted(world.polities)
+            if y != pid
+        ),
+        default=0.0,
+    )
+    neighbors = _bordering_nations(world, pol)
+    enemies = sum(1 for y in neighbors if hostile(world, pid, y, cfg))
+    encirclement = enemies / len(neighbors) if neighbors else 0.0
+    return _clamp01(
+        cfg.tension_dependency_share * reliance + cfg.tension_grudge_share * encirclement
+    )
+
+
+# --- Spannung als reine Daten: Summe, Dominanz, Kollaps-Test ------------------
+
+
+def _tension_of(decision: Decision) -> Tension:
+    """Die vier Gewichte der Faktorliste als reine Daten (fuer Zielwahl und Ansicht).
+
+    Kein zweites Modell und keine zweite Rechnung: exakt die Zahlen, aus denen die
+    Faktorliste besteht. Ein Druck, den ``Decision`` als 0 verworfen hat, ist hier 0.
+    """
+    weights = {f.label: f.weight for f in decision.factors}
+    return Tension(
+        volk=weights.get(FactorLabel.VOLKSDRUCK, 0.0),
+        elite=weights.get(FactorLabel.ELITENDRUCK, 0.0),
+        fiskal=weights.get(FactorLabel.FISKALDRUCK, 0.0),
+        aussen=weights.get(FactorLabel.AUSSENDRUCK, 0.0),
+    )
+
+
+def _tension_total(t: Tension) -> float:
+    """Der Spannungs-Score: Summe der vier Druecke in Deklarationsreihenfolge."""
+    return t.volk + t.elite + t.fiskal + t.aussen
+
+
+def _tension_parts(t: Tension) -> dict[str, float]:
+    """Die vier Druecke einer Nation als Abbildung Label -> Wert (feste Reihenfolge)."""
+    return {
+        FactorLabel.VOLKSDRUCK: t.volk,
+        FactorLabel.ELITENDRUCK: t.elite,
+        FactorLabel.FISKALDRUCK: t.fiskal,
+        FactorLabel.AUSSENDRUCK: t.aussen,
+    }
+
+
+def _tension_weights(cfg: Config) -> dict[str, float]:
+    """Die vier Gewichte der Config als Abbildung Label -> Gewicht.
+
+    Sie stehen genau hier: ``spannung`` multipliziert damit, ``_raw_pressures``
+    dividiert sie wieder heraus. Liefen die beiden auseinander, wuerden die Rohwerte
+    luegen — und mit ihnen der Kollaps-Test, der an ihnen haengt.
+    """
+    return {
+        FactorLabel.VOLKSDRUCK: cfg.tension_volk_weight,
+        FactorLabel.ELITENDRUCK: cfg.tension_elite_weight,
+        FactorLabel.FISKALDRUCK: cfg.tension_fiskal_weight,
+        FactorLabel.AUSSENDRUCK: cfg.tension_aussen_weight,
+    }
+
+
+def _dominant(t: Tension) -> str:
+    """Die dominante Komponente: groesster Wert, Gleichstand nach Deklarationsreihenfolge."""
+    parts = _tension_parts(t)
+    return min(_TENSION_ORDER, key=lambda label: (-parts[label], _TENSION_ORDER.index(label)))
+
+
+def _raw_pressures(t: Tension, cfg: Config) -> list[float]:
+    """Die vier Druecke zurueck auf ihre 0..1-Rohwerte gerechnet (ohne Gewicht).
+
+    Nur so ist "dieser Druck steht hoch" ueber die Komponenten hinweg vergleichbar:
+    die Gewichte sagen, wie sehr ein Druck ZAEHLT, nicht wie hoch er STEHT.
+    """
+    parts, weights = _tension_parts(t), _tension_weights(cfg)
+    return [
+        parts[label] / weights[label] if weights[label] > 0.0 else 0.0
+        for label in _TENSION_ORDER
+    ]
+
+
+def _is_kollaps(t: Tension, cfg: Config) -> bool:
+    """Zusammengesetzte Extremkrise: sehr hohe Spannung, von MEHREREN Druecken getragen.
+
+    Ein einzelner Druck, so hoch er auch stehen mag, entlaedt sich in seiner eigenen
+    Art. Erst wenn das Reich an mehreren Fronten ZUGLEICH reisst, faellt es auseinander
+    — nur dann waehlt keine einzelne Komponente mehr. Gemessen wird an den Rohwerten,
+    nicht an den Gewichten: sonst koennte ein leicht gewichteter Druck (Aussendruck) die
+    Schwelle nie erreichen und der Kollaps waere unerreichbar.
+    """
+    if _tension_total(t) < cfg.collapse_threshold:
+        return False
+    carrying = sum(
+        1 for raw in _raw_pressures(t, cfg) if raw >= cfg.collapse_component_floor
+    )
+    return carrying >= cfg.collapse_min_components
+
+
+# --- die Entladungen ---------------------------------------------------------
+
+
+def _entlade(
+    world: World,
+    pol: Polity,
+    decision: Decision,
+    rng: Stream,
+    cfg: Config,
+    log: EventLog,
+) -> bool:
+    """Vollziehe die Entladung: die dominante Komponente waehlt die Art.
+
+    Gibt zurueck, ob sich der Druck wirklich entladen hat — nur dann ist die Sperre
+    verbraucht und der Zustand der Nation ein anderer als vorher.
+    """
+    t = pol.tension
+    kollaps = _is_kollaps(t, cfg) and len(pol.territory) >= cfg.collapse_min_territory
+
+    # Der Aussendruck entlaedt sich nach AUSSEN — es sei denn, das Reich reisst ohnehin
+    # an allen Fronten (dann gilt der Kollaps). Sein Ereignis ist der KRIEG, den die
+    # Zielwahl gleich danach vollzieht (siehe ``_krisendruck``) und den die Kriegs-
+    # muedigkeit bremst. Hier gibt es keinen inneren Bruch — und darum auch keine
+    # Sperre zu verbrauchen.
+    if not kollaps and _dominant(t) == FactorLabel.AUSSENDRUCK:
+        return False
+
+    # Refraktaer: eine eben erschuetterte Gesellschaft bricht nicht schon im naechsten
+    # Jahr erneut — der Druck muss sich erst wieder aufbauen. Ohne diese Sperre
+    # flackerte dieselbe Nation im Dreijahrestakt durch Putsche, statt Zyklen zu
+    # durchlaufen: sie ist es, die aus dem Auf und Ab einen ZYKLUS macht.
+    if world.year - pol.last_crisis < cfg.crisis_cooldown_years:
+        return False
+
+    if kollaps:
+        if not _kollaps(world, pol, decision, rng, cfg, log):
+            return False  # kein Reichsteil abtrennbar: es ist nichts geschehen
+    else:
+        dominant = _dominant(t)
+        if dominant == FactorLabel.VOLKSDRUCK:
+            _aufstand(world, pol, decision, cfg, log)
+        elif dominant == FactorLabel.ELITENDRUCK:
+            _elitenkrise(world, pol, decision, rng, cfg, log)
+        else:  # FISKALDRUCK
+            _bankrott(world, pol, decision, cfg, log)
+    pol.last_crisis = world.year
+    return True
+
+
+def _aufstand(
+    world: World, pol: Polity, decision: Decision, cfg: Config, log: EventLog
+) -> None:
+    """Volksdruck entlaedt sich: Aufstand, Umverteilung, gepluenderter Schatz.
+
+    ENTLASTUNG des eigenen Drucks, doppelt: der aufgestaute Groll bricht sich Bahn und
+    faellt auf einen Restanteil — UND der Wohlstand wird umverteilt, was die
+    Ungleichheit senkt, die den Groll ueberhaupt naehrt. Er bleibt also laenger unten,
+    statt sofort wieder hochzulaufen (das ist die Laenge des Zyklus).
+
+    FOLGEWIRKUNG: der Schatz wird gepluendert (⇒ Fiskaldruck) und Soldaten wie Adel
+    bluten (⇒ das Reich steht entbloesst da — die Nachbarn lesen die Schwaeche in
+    ``_weakness`` und fallen ueber es her). So saet der Aufstand die naechste Krise
+    anderer Art.
+    """
+    pop_before = bevoelkerung(pol)
+    gold_before = pol.stocks.gold
+    elite_wealth_before = _elite_wealth(pol.strata)
+
+    # Der Groll entlaedt sich, und die Elite gibt Wohlstand ab.
+    pol.strata = _relieve_grievance(pol.strata, cfg.revolt_grievance_relief)
+    pol.strata = _shift_wealth(pol.strata, -cfg.revolt_redistribution)
+    # Die Rechnung: gepluenderter Schatz, gefallene Soldaten und Adlige.
+    pol.stocks = replace(pol.stocks, gold=gold_before * (1.0 - cfg.revolt_gold_loss))
+    pol.strata = _cull(pol.strata, StratumKind.SOLDAT, cfg.revolt_soldier_losses)
+    pol.strata = _cull(pol.strata, StratumKind.ELITE, cfg.revolt_elite_losses)
+
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.AUFSTAND,
+            subjects=(pol.id,),
+            factors=decision.as_factors(),
+            causes=decision.as_causes(),
+            effects=(
+                Effect(pol.id, "elite_wealth", elite_wealth_before, _elite_wealth(pol.strata)),
+                Effect(pol.id, "gold", gold_before, pol.stocks.gold),
+                Effect(pol.id, "population", pop_before, bevoelkerung(pol)),
+            ),
+        )
+    )
+
+
+def _elitenkrise(
+    world: World,
+    pol: Polity,
+    decision: Decision,
+    rng: Stream,
+    cfg: Config,
+    log: EventLog,
+) -> None:
+    """Elitendruck entlaedt sich: die ueberzaehlige Elite nimmt sich einen Staat — oder purgiert.
+
+    Ein teilbares Reich zerbricht an ihr (ABSPALTUNG): die ueberzaehligen Anwaerter
+    gruenden ihr eigenes Land und sind unter den Auswanderern ueberrepraesentiert
+    (``secession_elite_bias``) — genau das entlastet die Mutter. Ein unteilbares Reich
+    frisst sie von innen (PUTSCH).
+    """
+    if len(pol.territory) >= cfg.secession_min_territory:
+        blob = _carve_breakaway(world, pol)
+        if blob:
+            pop_before = bevoelkerung(pol)
+            child, capital, effects = _secede(
+                world, pol, blob, rng, cfg, elite_bias=cfg.secession_elite_bias
+            )
+            effects.append(Effect(pol.id, "population", pop_before, bevoelkerung(pol)))
+            log.append(
+                EventDraft(
+                    year=world.year,
+                    kind=EventKind.ABSPALTUNG,
+                    subjects=(pol.id, child.id, capital),
+                    factors=decision.as_factors(),
+                    causes=decision.as_causes(),
+                    effects=tuple(effects),
+                )
+            )
+            return
+    _putsch(world, pol, decision, rng, cfg, log)
+
+
+def _putsch(
+    world: World,
+    pol: Polity,
+    decision: Decision,
+    rng: Stream,
+    cfg: Config,
+    log: EventLog,
+) -> None:
+    """Elitendruck ohne Ventil: die Elite stuerzt den Herrscher und purgiert sich selbst.
+
+    ENTLASTUNG: die unterlegene Faktion wird purgiert — die Elite schrumpft, der Druck
+    faellt sofort.
+    FOLGEWIRKUNG: die Sieger greifen nach dem Wohlstand (⇒ die Ungleichheit steigt,
+    der Volksgroll waechst ueber die naechsten Jahre), und auf dem Thron sitzt ein
+    Usurpator mit schwacher Legitimitaet — die bestehende Sukzessionskrise kann daran
+    das Reich spalten (der Buergerkrieg des Konzepts, ohne eine Zeile neuer Mechanik).
+    """
+    elite_before = _stratum_size(pol, StratumKind.ELITE)
+    pol.strata = _cull(pol.strata, StratumKind.ELITE, cfg.coup_elite_purge)
+    pol.strata = _shift_wealth(pol.strata, cfg.coup_wealth_grab)
+
+    rid = pol.leader
+    fallen = world.rulers.get(rid) if rid is not None else None
+    subjects: tuple[EntityId, ...] = (pol.id,) if rid is None else (pol.id, rid)
+    putsch_id = log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.PUTSCH,
+            subjects=subjects,
+            factors=decision.as_factors(),
+            causes=decision.as_causes(),
+            effects=(
+                Effect(pol.id, "elite", elite_before, _stratum_size(pol, StratumKind.ELITE)),
+            ),
+        )
+    )
+    if rid is None or fallen is None or not fallen.alive:
+        return
+
+    # Der gestuerzte Herrscher faellt; der Usurpator folgt noch im selben Tick (der
+    # ``ruler``-Lauf ist vorbei — kein Tick endet ohne lebenden Herrscher).
+    fallen.alive = False
+    death_id = log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.TOD_FIGUR,
+            subjects=(pol.id, rid),
+            factors=(Factor(FactorLabel.ELITENDRUCK, pol.tension.elite),),
+            causes=(putsch_id,),
+            effects=(Effect(rid, "alive", True, False),),
+        )
+    )
+    succ_event, new_ruler = _succeed(
+        world, pol, rng, cfg, log, death_id, mode=AccessionMode.USURPED
+    )
+    _maybe_fragment(world, pol, new_ruler, succ_event, rng, cfg, log)
+
+
+def _bankrott(
+    world: World, pol: Polity, decision: Decision, cfg: Config, log: EventLog
+) -> None:
+    """Fiskaldruck entlaedt sich: der Staat entlaesst, was er nicht bezahlen kann.
+
+    ENTLASTUNG, auf BEIDEN Seiten der Rechnung: die Soldaten, deren Sold die Kasse nicht
+    traegt, kehren aufs Feld zurueck — und das Gefolge, dessen Pfruende die Krone nicht
+    mehr aufbringt, faellt aus dem Stand. Das zweite Glied ist das entscheidende: der Hof
+    ist der groesste Posten der Pflichten, der Sold der kleinste. Ein Bankrott, der nur
+    das Heer verkleinert, senkte seine eigene Rechnung um wenige Prozent — er waere gar
+    keine Entladung. Und weil beide Gruppen wieder Getreide erzeugen, sinkt ueber die
+    naechsten Jahre auch das dritte Glied der Pflichten (die Nothilfe).
+
+    FOLGEWIRKUNG: bezahlt wird der Rest mit Zwangsabgaben — der Groll der unteren
+    Schichten steigt. Und die Deklassierten sinken in eben diese Schichten, ohne dass
+    deren Wohlstandsanteil mitwuechse: mehr Koepfe teilen dasselbe wenige, die
+    Ungleichheit je Kopf steigt und mit ihr, ueber die naechsten Jahre, der Volksdruck
+    (⇒ Aufstand). Der verarmte Adel ist der Zuender der naechsten Krise anderer Art —
+    und das entbloesste Heer laedt die Nachbarn ein.
+    """
+    soldiers_before = _stratum_size(pol, StratumKind.SOLDAT)
+    elite_before = _stratum_size(pol, StratumKind.ELITE)
+    released = soldiers_before * cfg.bankruptcy_demobilization
+    dismissed = elite_before * cfg.bankruptcy_dismissal
+    # Die Entlassenen verschwinden nicht: sie werden (wieder) Arbeiter.
+    pol.strata = tuple(
+        replace(s, size=s.size - released)
+        if s.kind == StratumKind.SOLDAT
+        else replace(s, size=s.size - dismissed)
+        if s.kind == StratumKind.ELITE
+        else replace(s, size=s.size + released + dismissed)
+        if s.kind == StratumKind.ARBEITER
+        else s
+        for s in pol.strata
+    )
+    pol.strata = _aggrieve(pol.strata, cfg.bankruptcy_levy_grievance, cfg)
+
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.BANKROTT,
+            subjects=(pol.id,),
+            factors=decision.as_factors(),
+            causes=decision.as_causes(),
+            effects=(
+                Effect(
+                    pol.id,
+                    "soldiers",
+                    soldiers_before,
+                    _stratum_size(pol, StratumKind.SOLDAT),
+                ),
+                Effect(
+                    pol.id,
+                    "elite",
+                    elite_before,
+                    _stratum_size(pol, StratumKind.ELITE),
+                ),
+            ),
+        )
+    )
+
+
+def _kollaps(
+    world: World,
+    pol: Polity,
+    decision: Decision,
+    rng: Stream,
+    cfg: Config,
+    log: EventLog,
+) -> bool:
+    """Die zusammengesetzte Extremkrise: das Reich zerfaellt in Nachfolgestaaten.
+
+    Keine einzelne Komponente traegt das mehr — das Reich reisst an mehreren Fronten
+    zugleich. Es gibt Reichsteile ab, bis nur ein Rumpf bleibt, und mit der alten
+    Ordnung gehen auch der alte Adel und der alte Groll: Rumpf wie Nachfolger starten
+    mit gebrochener Elite und weitgehend entladenem Groll. Das ist die Entlastung —
+    sie trifft ALLE Druecke, denn alle hatten das Reich zerrissen.
+
+    Gibt zurueck, ob der Zerfall stattfand: laesst sich kein Reichsteil abtrennen,
+    ist nichts geschehen — dann darf er auch die Sperre nicht verbrauchen.
+    """
+    pop_before = bevoelkerung(pol)
+    effects: list[Effect] = []
+    successors: list[EntityId] = []
+    while (
+        len(successors) < cfg.collapse_max_successors
+        and len(pol.territory) >= cfg.collapse_min_territory
+    ):
+        blob = _carve_breakaway(world, pol)
+        if not blob:
+            break
+        child, _capital, child_effects = _secede(
+            world, pol, blob, rng, cfg, elite_bias=cfg.secession_elite_bias
+        )
+        successors.append(child.id)
+        effects.extend(child_effects)
+        _sweep_away_old_order(child, cfg)
+    if not successors:  # kein Reichsteil abtrennbar ⇒ keine Entladung dieser Art
+        return False
+
+    _sweep_away_old_order(pol, cfg)
+    effects.append(Effect(pol.id, "population", pop_before, bevoelkerung(pol)))
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.KOLLAPS,
+            subjects=(pol.id, *successors),
+            factors=decision.as_factors(),
+            causes=decision.as_causes(),
+            effects=tuple(effects),
+        )
+    )
+    return True
+
+
+def _sweep_away_old_order(pol: Polity, cfg: Config) -> None:
+    """Der Kollaps fegt die alte Ordnung fort: gebrochene Elite, entladener Groll."""
+    pol.strata = _cull(pol.strata, StratumKind.ELITE, cfg.collapse_elite_purge)
+    pol.strata = _relieve_grievance(pol.strata, cfg.collapse_grievance_relief)
+
+
+# --- Schichten-Helfer der Entladungen ----------------------------------------
+
+
+def _elite_wealth(strata: tuple[Stratum, ...]) -> float:
+    """Wohlstandsanteil der Elite (0..1)."""
+    return next((s.wealth_share for s in strata if s.kind == StratumKind.ELITE), 0.0)
+
+
+def _cull(strata: tuple[Stratum, ...], kind: StratumKind, rate: float) -> tuple[Stratum, ...]:
+    """Verkleinere EINE Schicht um einen Anteil (die Verluste einer Entladung)."""
+    if rate <= 0.0:
+        return strata
+    return tuple(
+        replace(s, size=max(0.0, s.size * (1.0 - rate))) if s.kind == kind else s
+        for s in strata
+    )
+
+
+def _relieve_grievance(strata: tuple[Stratum, ...], keep: float) -> tuple[Stratum, ...]:
+    """Der Groll der unteren Schichten entlaedt sich auf den Restanteil ``keep``."""
+    return tuple(
+        replace(s, grievance=s.grievance * keep) if s.kind != StratumKind.ELITE else s
+        for s in strata
+    )
+
+
+def _aggrieve(strata: tuple[Stratum, ...], amount: float, cfg: Config) -> tuple[Stratum, ...]:
+    """Hebe den Groll der unteren Schichten (Zwangsabgaben), gedeckelt wie immer."""
+    return tuple(
+        replace(s, grievance=min(cfg.grievance_cap, s.grievance + amount))
+        if s.kind != StratumKind.ELITE
+        else s
+        for s in strata
+    )
+
+
+def _shift_wealth(strata: tuple[Stratum, ...], to_elite: float) -> tuple[Stratum, ...]:
+    """Verschiebe Wohlstandsanteil zwischen unteren Schichten und Elite.
+
+    ``to_elite > 0``: die Elite greift zu (Putsch) — die Ungleichheit steigt und mit
+    ihr, ueber die naechsten Jahre, der Volksgroll. ``to_elite < 0``: die Elite gibt ab
+    (Aufstand) — die Umverteilung, die den Groll dauerhaft daempft.
+
+    Verschoben wird hoechstens, was die abgebende Seite wirklich haelt; damit bleiben
+    alle Anteile in [0, 1] und summieren weiterhin zu 1 (Invariante). Der ZUGRIFF nimmt
+    anteilig zum Besitz — wo nichts ist, ist nichts zu holen. Die UMVERTEILUNG gibt
+    anteilig zur Kopfzahl, denn genau das ist der gerechte Anteil, an dem sich der Groll
+    misst (``grievance``: Groesse/Gesamt gegen ``wealth_share``). Sie darf sich nicht am
+    Besitz orientieren: eine total enteignete Unterschicht haelt 0 und bekaeme dann
+    anteilig 0 zurueck — die vollstaendige Enteignung waere ein Zustand, aus dem kein
+    Aufstand mehr herausfuehrt.
+    """
+    lower = [s for s in strata if s.kind != StratumKind.ELITE]
+    grab = to_elite > 0.0
+    keys = {s.kind: (s.wealth_share if grab else s.size) for s in lower}
+    total = sum(keys.values())
+    if total <= 0.0:  # niemand, der geben koennte — bzw. niemand, der lebte
+        return strata
+    shift = (
+        min(to_elite, sum(s.wealth_share for s in lower))
+        if grab
+        else -min(-to_elite, _elite_wealth(strata))
+    )
+    if shift == 0.0:
+        return strata
+    return tuple(
+        replace(s, wealth_share=s.wealth_share + shift)
+        if s.kind == StratumKind.ELITE
+        else replace(s, wealth_share=max(0.0, s.wealth_share - shift * keys[s.kind] / total))
+        for s in strata
+    )
 
 
 # === Utility-basierte Zielwahl (Aenderung 4) ================================
@@ -871,6 +1598,7 @@ def _score_ressource_sichern(
         return None
 
     et = _effective_traits(world, pol)
+    crisis = _krisendruck(pol, world.year, cfg)  # haengt an der Nation, nicht am Ziel
     best: _GoalChoice | None = None
     for y in targets:
         # Nur ein Ziel mit erreichbarem Feld kommt in Frage: eine Nation, die
@@ -894,12 +1622,39 @@ def _score_ressource_sichern(
             * _supplier_risk(world, pid, y, cfg),
         )
         decision.add(FactorLabel.BEUTE, cfg.goal_prize_weight * _prize(world, pid, prize, cfg))
+        decision.add(FactorLabel.AUSSENDRUCK, crisis)
         decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
         decision.add(FactorLabel.MILITAERVORTEIL, _advantage(world, pid, y, powers, cfg))
         decision.add(FactorLabel.FURCHT, -pol.fear.get(y, 0.0))
         decision.add(FactorLabel.VORSICHT, -et.caution)
         best = _better_target(best, _GoalChoice(GoalKind.RESSOURCE_SICHERN, decision, y))
     return best
+
+
+def _krisendruck(pol: Polity, year: int, cfg: Config) -> float:
+    """Der Zuschlag der Aussendruck-Entladung auf die Kriegsziele (Aenderung 6).
+
+    Steht die Spannung einer Nation ueber der Schwelle und ist der **Aussendruck** ihre
+    dominante Komponente, dann muss sie nach aussen handeln — der Krieg IST ihre
+    Entladung. Statt einen zweiten Kriegspfad zu bauen, legt die Spannung ihr Motiv als
+    benannten Faktor auf die bestehende Zielwahl: die Utility waehlt das Ziel, der
+    KRIEG-Event traegt den ``Aussendruck`` in seiner Begruendung. Unterhalb der
+    Schwelle ist der Zuschlag 0 (und faellt damit aus der Faktorliste) — der aeussere
+    Druck wirkt dann weiter ueber seine gewohnten Kanaele (Handelsabhaengigkeit,
+    Misstrauen, Grenzreibung), nur eben nicht als Krise.
+
+    Wer sich noch in diesem Jahr nach INNEN entladen hat, zieht nicht auch noch in den
+    Krieg: die Spannung hatte ihr Ventil. Das trifft genau den Kollaps — er allein
+    bricht ein Reich auch dann auf, wenn der aeussere Druck der dominante ist (er
+    ueberstimmt die Dominanz). Ein eben zerfallenes Reich soll nicht im selben Jahr mit
+    dem Zuschlag einer Krise angreifen, die es gerade zerrissen hat.
+    """
+    t = pol.tension
+    if pol.last_crisis == year:
+        return 0.0
+    if _tension_total(t) < cfg.tension_threshold or _dominant(t) != FactorLabel.AUSSENDRUCK:
+        return 0.0
+    return cfg.goal_crisis_weight * t.aussen
 
 
 def _score_groll_vergelten(
@@ -917,6 +1672,7 @@ def _score_groll_vergelten(
     """
     pol = world.polities[pid]
     et = _effective_traits(world, pol)
+    crisis = _krisendruck(pol, world.year, cfg)  # haengt an der Nation, nicht am Ziel
     best: _GoalChoice | None = None
     for y in targets:
         py = world.polities[y]
@@ -949,6 +1705,8 @@ def _score_groll_vergelten(
             and et_y.aggression >= cfg.personal_aggression_threshold
         ):
             decision.add(FactorLabel.PERSOENLICHE_RIVALITAET, cfg.personal_rivalry_weight)
+        # Aussendruck-Entladung (Aenderung 6): die Krise treibt auch die Vergeltung.
+        decision.add(FactorLabel.AUSSENDRUCK, crisis)
         decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
         decision.add(FactorLabel.MILITAERVORTEIL, _advantage(world, pid, y, powers, cfg))
         decision.add(FactorLabel.FURCHT, -pol.fear.get(y, 0.0))
@@ -1212,6 +1970,12 @@ def _wage_war(
     pw.stocks = replace(
         pw.stocks, eisen=pw.stocks.eisen * (1.0 - cfg.war_iron_loss * cfg.war_winner_iron_share)
     )
+    # Kriegsgewinner-Eliten (Aenderung 6, Konzept §3.3): der Sieg hebt Offiziere und
+    # Profiteure aus den Arbeitern in die Elite. Der Krieg loest die Knappheit — und
+    # saet die Eliten-Ueberproduktion, die als naechste Krise faellig wird. Das ist der
+    # EINZIGE Kanal, der den Elite-Anteil je verschiebt: ohne ihn bliebe er auf ewig
+    # exakt bei seinem Anfangswert und der Elitendruck eine flache Linie.
+    _promote_elite(pw, cfg.war_elite_promotion)
 
     effects: list[Effect] = []
     region = _contested_region(world, winner, loser)
@@ -1399,10 +2163,17 @@ def _succeed(
     cfg: Config,
     log: EventLog,
     cause: EventId | None,
+    *,
+    mode: AccessionMode | None = None,
 ) -> tuple[EventId, Ruler]:
-    """Setze einen Nachfolger ein und emittiere das SUKZESSION-Event (caused-by Tod)."""
+    """Setze einen Nachfolger ein und emittiere das SUKZESSION-Event (caused-by Tod).
+
+    ``mode=None`` zieht den Machtantritt (Erbe/Wahl/Usurpation) — der Normalfall nach
+    einem natuerlichen Tod. Ein Putsch (Aenderung 6) gibt ihn vor: wer sich an die
+    Macht putscht, ist ein Usurpator und traegt dessen schwache Legitimitaet.
+    """
     old = world.rulers.get(pol.leader) if pol.leader is not None else None
-    new = forge_ruler(world.next_id, rng, cfg)
+    new = forge_ruler(world.next_id, rng, cfg, mode=mode)
     world.next_id += 1
     # Wendepunkt-Flag: grosser Trait-Sprung gegenueber dem Vorgaenger.
     new.turning_point = (
@@ -1563,7 +2334,51 @@ def _spawn_breakaway(
     cfg: Config,
     log: EventLog,
 ) -> None:
-    """Gruende die Abspaltung als neue Nation (eigene id, eigener Herrscher)."""
+    """Gruende die Abspaltung der Sukzessionskrise als neue Nation (Phase 3)."""
+    pop_before = bevoelkerung(parent)
+    child, capital, effects = _secede(world, parent, blob, rng, cfg)
+    effects.append(Effect(parent.id, "population", pop_before, bevoelkerung(parent)))
+    # Die Sukzession ist der strukturelle Ausloeser der Krise und wird stets als
+    # Ursache verlinkt (Fragmentierung ← Sukzession ← Herrschertod), unabhaengig
+    # davon, welcher Faktor die Entscheidung dominierte.
+    causes = decision.as_causes()
+    if succ_event is not None and succ_event not in causes:
+        causes = tuple(sorted({*causes, succ_event}))
+    log.append(
+        EventDraft(
+            year=world.year,
+            kind=EventKind.ABSPALTUNG,
+            subjects=(parent.id, child.id, capital),
+            factors=decision.as_factors(),
+            causes=causes,
+            effects=tuple(effects),
+        )
+    )
+
+
+def _secede(
+    world: World,
+    parent: Polity,
+    blob: list[EntityId],
+    rng: Stream,
+    cfg: Config,
+    *,
+    elite_bias: float = 1.0,
+) -> tuple[Polity, EntityId, list[Effect]]:
+    """Gliedere ``blob`` als neue Nation aus — reiner Zustandswechsel, KEIN Event.
+
+    Der gemeinsame Kern aller Reichsteilungen: der Sukzessionskrise (Phase 3), der
+    Abspaltung aus Elitendruck und des Kollaps (Aenderung 6). Der Aufrufer emittiert
+    das Ereignis und haengt die zurueckgegebenen ``effects`` daran — so traegt jede
+    Teilung die Faktoren IHRER Ursache.
+
+    Bevoelkerung und Bestaende gehen anteilig zur Regionszahl mit; Groll und
+    Wohlstandsanteile sind intensiv und wandern unveraendert. ``elite_bias`` hebt den
+    Anteil der Elite, der mitgeht: bei einer Abspaltung AUS Elitendruck ist es gerade
+    die ueberzaehlige Elite, die geht. Eine proportionale Teilung (``1.0``, der Weg der
+    Sukzessionskrise) halbierte Elite UND Aemter zugleich und liesse den Elitendruck
+    unveraendert — sie waere keine Entlastung.
+    """
     total_regions = len(parent.territory)
     k = len(blob)
     blob_set = set(blob)
@@ -1578,12 +2393,10 @@ def _spawn_breakaway(
     for r in blob:
         world.regions[r].owner = new_pid
 
-    # Bevoelkerung (Schichten) und Bestaende anteilig nach Regionszahl aufteilen.
-    # Groll und Wohlstandsanteile sind intensiv und wandern unveraendert mit.
     share = k / total_regions
-    pop_before = bevoelkerung(parent)
-    moved_strata = _scaled_strata(parent.strata, share)
-    parent.strata = _scaled_strata(parent.strata, 1.0 - share)
+    elite_share = min(1.0, share * elite_bias)
+    moved_strata = _split_strata(parent.strata, share, elite_share)
+    parent.strata = _split_strata(parent.strata, 1.0 - share, 1.0 - elite_share)
     parent.peak_population = max(parent.peak_population, bevoelkerung(parent))
     moved_pop = int(sum(s.size for s in moved_strata))
     ps = parent.stocks
@@ -1624,22 +2437,21 @@ def _spawn_breakaway(
     world.polities[new_pid] = new_pol
 
     effects = [Effect(r, "owner", parent.id, new_pid) for r in sorted(blob)]
-    effects.append(Effect(parent.id, "population", pop_before, bevoelkerung(parent)))
-    # Die Sukzession ist der strukturelle Ausloeser der Krise und wird stets als
-    # Ursache verlinkt (Fragmentierung ← Sukzession ← Herrschertod), unabhaengig
-    # davon, welcher Faktor die Entscheidung dominierte.
-    causes = decision.as_causes()
-    if succ_event is not None and succ_event not in causes:
-        causes = tuple(sorted({*causes, succ_event}))
-    log.append(
-        EventDraft(
-            year=world.year,
-            kind=EventKind.ABSPALTUNG,
-            subjects=(parent.id, new_pid, new_capital),
-            factors=decision.as_factors(),
-            causes=causes,
-            effects=tuple(effects),
+    return new_pol, new_capital, effects
+
+
+def _split_strata(
+    strata: tuple[Stratum, ...], share: float, elite_share: float
+) -> tuple[Stratum, ...]:
+    """Skaliere die Schichten fuer eine Reichsteilung; die Elite mit eigenem Anteil."""
+    return tuple(
+        replace(
+            s,
+            size=max(
+                0.0, s.size * (elite_share if s.kind == StratumKind.ELITE else share)
+            ),
         )
+        for s in strata
     )
 
 

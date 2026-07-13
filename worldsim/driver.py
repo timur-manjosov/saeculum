@@ -44,6 +44,7 @@ from worldsim.systems import (
     production,
     research,
     ruler,
+    tension,
     trade,
 )
 
@@ -71,9 +72,15 @@ SYSTEMS: list[tuple[str, System]] = [
     ("grievance", grievance),
     ("friction", friction),
     ("diplomacy", diplomacy),
+    # Der Spannungszustand (Aenderung 6) steht am Ende der Lage-Bildung und VOR der
+    # Zielwahl: er liest alles Frische (Groll, Schatz, Schichten, Abhaengigkeit,
+    # favor, Reibung) und entlaedt sich, wo der Druck die Schwelle reisst — nach
+    # innen selbst (Aufstand/Putsch/Abspaltung/Bankrott/Kollaps), nach aussen ueber
+    # die Zielwahl gleich danach (Krieg). Deshalb muss er ihr vorausgehen.
+    ("tension", tension),
     # Die utility-basierte Zielwahl steht am Ende der Lage-Bildung: sie liest die
-    # frischen Groessen (Defizit, Groll, Reibung, Furcht, favor) und vollzieht das
-    # gewaehlte Ziel sofort — Expansion und Krieg sind ihre Handlungen.
+    # frischen Groessen (Defizit, Groll, Reibung, Furcht, favor, Spannung) und
+    # vollzieht das gewaehlte Ziel sofort — Expansion und Krieg sind ihre Handlungen.
     ("goals", goals),
     # Am Tick-Ende: Glaubensausbreitung (Konversion) und Schisma. Die Affinitaets-
     # Faktoren in Diplomatie/Krieg lesen die Identitaeten des Vorjahres.

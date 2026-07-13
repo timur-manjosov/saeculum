@@ -68,6 +68,15 @@ class EventKind(StrEnum):
     DUERRE = "DUERRE"
     INNOVATION = "INNOVATION"
     WENDEPUNKT = "WENDEPUNKT"
+    # Aenderung 6 aktiv (Entladungen des Spannungszustands). Die dominante
+    # Komponente der Spannung waehlt die Art: Volksdruck ⇒ AUFSTAND, Elitendruck
+    # ⇒ PUTSCH oder ABSPALTUNG (oben), Fiskaldruck ⇒ BANKROTT, extrem/zusammen-
+    # gesetzt ⇒ KOLLAPS. Der Aussendruck entlaedt sich nach aussen und braucht
+    # keine eigene Art: sein Ereignis ist der KRIEG (oben).
+    AUFSTAND = "AUFSTAND"
+    PUTSCH = "PUTSCH"
+    BANKROTT = "BANKROTT"
+    KOLLAPS = "KOLLAPS"
     # Fuer spaetere Phasen reserviert:
     WERK = "WERK"
     MIGRATION = "MIGRATION"
@@ -123,6 +132,13 @@ class FactorLabel(StrEnum):
     BEUTE = "Beute"
     # Aenderung 5: Handel und Abhaengigkeit (Krieg aus Handelsverflechtung).
     HANDELSABHAENGIGKEIT = "Handelsabhaengigkeit"
+    # Aenderung 6: die vier Komponenten des Spannungszustands. Ihre Summe IST die
+    # Spannung, ihre groesste waehlt die Art der Entladung — die Faktorliste einer
+    # Entladung ist exakt diese Rechnung (Strukturell-Demografische Theorie).
+    VOLKSDRUCK = "Volksdruck"
+    ELITENDRUCK = "Elitendruck"
+    FISKALDRUCK = "Fiskaldruck"
+    AUSSENDRUCK = "Aussendruck"
     # Phase 5: Schocks, Technologie, Wendepunkte.
     PEST = "Pest"
     ERDBEBEN = "Erdbeben"
@@ -145,6 +161,7 @@ class FactorLabel(StrEnum):
     FRAGMENTIERUNG = "Fragmentierung"
     BEKEHRUNG = "Bekehrung"
     GLAUBENSSPALTUNG = "Glaubensspaltung"
+    INNERE_KRISE = "Innere Krise"
     KATASTROPHE = "Katastrophe"
     TECHNOLOGISCHER_DURCHBRUCH = "Technologischer Durchbruch"
     WENDEPUNKT = "Wendepunkt"
