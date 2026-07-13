@@ -24,6 +24,7 @@ from worldsim.config import DEFAULT_CONFIG, Config
 from worldsim.driver import SYSTEMS, simulate, worldgen
 from worldsim.events import Decision, Event, EventKind, EventLog, FactorLabel
 from worldsim.models import (
+    AccessionMode,
     NationTraits,
     Polity,
     Region,
@@ -470,7 +471,9 @@ def test_the_bankruptcy_disbands_the_army_and_levies_the_people() -> None:
 def _install_ruler(world: World, cfg: Config) -> int:
     from worldsim.systems import forge_ruler
 
-    ruler = forge_ruler(900, Rng(1).stream("r"), cfg)
+    ruler = forge_ruler(
+        900, Rng(1).stream("r"), cfg, mode=AccessionMode.INHERITED, name="Testrex"
+    )
     world.rulers[ruler.id] = ruler
     world.polities[X].leader = ruler.id
     world.next_id = 901
@@ -676,20 +679,35 @@ def test_internal_crises_arise_endogenously_in_the_full_simulation() -> None:
 def test_famine_breeds_uprisings() -> None:
     """Die erste Schleife des Konzepts (§4): Getreidemangel ⇒ Volksgroll ⇒ Aufstand.
 
-    Variiert wird allein die ERNTESCHWANKUNG — das Land bleibt gleich fruchtbar. Damit
-    unterscheiden sich die beiden Welten nur in einem: wie oft die Ernte ausfaellt.
-    (Aermeres Land gegen reicheres zu stellen waere kein sauberer Vergleich: reiche
-    Welten tragen groessere Bevoelkerungen und damit mehr von ALLEM.)
+    Der alte Hebel dieses Tests ist mit Aenderung 7 fort (die Ernteschwankung wurde
+    gewuerfelt, also musste sie weg). An seine Stelle treten zwei Nachweise, und der
+    zweite ist der eigentliche:
+
+    * **im Kausalgraphen**: der Volksdruck zitiert die Hungersnoete, die ihn naehrten
+      (``_TENSION_CAUSE``), und ein Aufstand traegt die Faktorliste des Volksdrucks. Ein
+      grosser Teil der Aufstaende nennt seinen Hunger also beim Namen.
+    * **kontrafaktisch**: nimmt man den Hunger als Groll-Treiber heraus, brechen deutlich
+      weniger Aufstaende aus. Er TRAEGT sie, er begleitet sie nicht nur — und das ist die
+      Zusage, die zaehlt, denn der Groll hat einen zweiten Treiber (die Ungleichheit),
+      hinter dem sich ein toter Hunger-Kanal bequem verstecken koennte. Genau das war er
+      nach dem Wegfall der Ernteschwankung eine Zeitlang: die Rate musste an das neue,
+      chronisch-flache Hunger-Signal angepasst werden (siehe ``grievance_hunger_rate``).
     """
-
-    def uprisings(variance: float) -> int:
-        cfg = Config(harvest_variance=variance)
-        return sum(
-            len(simulate(seed=s, years=250, cfg=cfg)[1].by_kind(EventKind.AUFSTAND))
-            for s in (7, 42, 1234)
-        )
-
-    assert uprisings(0.60) > uprisings(0.05)
+    named = total = 0
+    for seed in (7, 42, 1234):
+        _, log = simulate(seed=seed, years=250)
+        for e in log.by_kind(EventKind.AUFSTAND):
+            total += 1
+            if any(log.get(c).kind is EventKind.HUNGERSNOT for c in e.causes):
+                named += 1
+    satt = sum(
+        len(simulate(seed=s, years=250, cfg=Config(grievance_hunger_rate=0.0))[1]
+            .by_kind(EventKind.AUFSTAND))
+        for s in (7, 42, 1234)
+    )
+    assert total >= 20
+    assert named / total > 0.3  # ein grosser Teil nennt seinen Hunger als Ursache
+    assert total > satt * 1.3  # und ohne den Hunger-Treiber bricht deutlich weniger aus
 
 
 def test_the_tension_of_a_nation_cycles_it_neither_flatlines_nor_explodes() -> None:

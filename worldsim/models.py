@@ -245,6 +245,15 @@ class Region:
     # Regionen traegt ein Vorkommen. Eisenarme Nationen muessen Eisen importieren
     # (Handelsabhaengigkeit), notfalls vom Rivalen — die Wurzel des Handelskriegs.
     iron_rich: bool = False
+    # Aenderung 7: die Geologie des Feldes. ``seismicity`` (0..1, aus dem Worldgen)
+    # ist die Rate, mit der sich Gesteinsspannung aufbaut — 0 heisst aseismisch.
+    # ``strain`` ist die aufgestaute Spannung selbst; erreicht sie 1, bricht sie
+    # als Erdbeben. Damit ist der letzte exogene Schock kein Wurf mehr, sondern
+    # dieselbe Figur wie alles andere in dieser Welt: Aufbau bis zur Schwelle,
+    # dann Entladung. Der Zufall steckt in der Geologie (Anfangsbedingung), nicht
+    # im Ereignispfad.
+    seismicity: float = 0.0
+    strain: float = 0.0
     # Adjazenz/Distanz fuer Handel & Krieg = Grenzen.
     nachbarn: tuple[EntityId, ...] = ()
     owner: EntityId | None = None
@@ -370,6 +379,12 @@ class World:
     """
 
     year: int = 0
+    # Der Seed, aus dem diese Welt entstand ("Speichern = Seed"). Reine Daten, keine
+    # RNG-Instanz. Er dient allein dem KOSMETISCHEN Strom: der Name einer neu
+    # entstehenden Nation/Identitaet wird daraus abgeleitet und beruehrt damit den
+    # semantischen Strom nicht (Determinismus-Vertrag: Flavour darf nie beeinflussen,
+    # WELCHE Fakten entstehen — vorher zog ``make_name`` aus dem Entscheidungsstrom).
+    seed: int = 0
     regions: dict[EntityId, Region] = field(default_factory=dict)
     settlements: dict[EntityId, Settlement] = field(default_factory=dict)
     polities: dict[EntityId, Polity] = field(default_factory=dict)

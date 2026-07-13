@@ -22,7 +22,7 @@ class Config:
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
     # Defaults erhoehen.
-    config_version: int = 12
+    config_version: int = 13
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -67,8 +67,13 @@ class Config:
     # — die Quelle der Handelsabhaengigkeit). Der Foerdersatz oben ist erhoeht, damit
     # die Welt-Eisenmenge grob erhalten bleibt (nur die Verteilung wird ungleich).
     iron_region_fraction: float = 0.5
-    # Jaehrliche Ernteschwankung: +/- Anteil um die Kapazitaet (Hunger-Quelle).
-    harvest_variance: float = 0.30
+    # Aenderung 7: die jaehrliche Ernteschwankung ist FORT. Sie war ein Wuerfelwurf im
+    # Ereignispfad — und zwar der folgenreichste: er erzeugte die Hungersnot und damit
+    # den Volksdruck, also die halbe Spannungsmechanik. Der Hunger ist jetzt
+    # malthusianisch: die Bevoelkerung waechst an die Tragfaehigkeit des Landes heran und
+    # sitzt dort auf der Kante. Faellt das Land weg (Krieg, Abspaltung, Beben-Narbe),
+    # bleiben die Muender — und das Reich hungert, bis es sich zurueckgehungert hat.
+    # Gemessen: 96% aller Nahrungsdefizite kommen so zustande.
 
     # --- consumption: Bevoelkerung isst Getreide, der Staat zahlt Gold ------
     food_per_person: float = 0.04
@@ -114,7 +119,19 @@ class Config:
     # --- Groll (grievance): baut sich auf, entlaedt sich noch nicht --------
     # Aufbau bei Getreidemangel (unter den unteren Schichten) und bei ungleichem
     # Wohlstandsanteil (haelt eine Schicht weniger als ihren Bevoelkerungsanteil).
-    grievance_hunger_rate: float = 0.20
+    #
+    # Die Hunger-Rate ist mit Aenderung 7 von 0.20 auf 2.0 gestiegen, und zwar NICHT,
+    # weil der Hunger wichtiger geworden waere, sondern weil sein SIGNAL eine andere
+    # Gestalt hat. Der alte Ernte-Wuerfel erzeugte akute, tiefe Einbrueche (ein Jahr,
+    # bis zu -30% Ernte). Der malthusianische Hunger ist das Gegenteil: chronisch und
+    # flach (gemessen: das Defizit betraegt im Hungerjahr im Median 1.8% des Bedarfs,
+    # weil die Bevoelkerung sich an die Tragfaehigkeit zurueckhungert). Bei der alten
+    # Rate trug er praktisch nichts mehr bei — schaltete man die Ungleichheit ab, gab
+    # es NULL Aufstaende: die erste Schleife des Konzepts (§4, Mangel ⇒ Groll ⇒
+    # Aufstand) war tot, und der Regler eine Attrappe. Bei 2.0 traegt ein DAUERHAFTES
+    # Defizit den Groll auf ~2.0 (Ungleichheit traegt ihn auf ~1.5) — und damit steht
+    # die richtige Ordnung wieder: Hunger toetet, Ungleichheit aergert nur.
+    grievance_hunger_rate: float = 2.0
     grievance_inequality_rate: float = 0.30
     # Langsamer Zerfall Richtung 0, wenn kein Druck wirkt (Vergessen/Beschwichtigung).
     grievance_decay: float = 0.05
@@ -390,18 +407,28 @@ class Config:
     grudge_floor: float = 1.0
 
     # --- ruler: Herrscher als duenne Trait-Ueberlagerung -------------------
-    # Lebensspanne (Jahre) und Alter beim Machtantritt, je deterministisch gezogen.
-    ruler_lifespan_min: int = 45
-    ruler_lifespan_max: int = 75
+    # Lebensspanne (Jahre) und Alter beim Machtantritt. Beide werden bei der GEBURT des
+    # Herrschers gezogen — das ist seine Konstitution, eine Anfangsbedingung, kein
+    # Ausloeser (Aenderung 7). Er stirbt dann NICHT mehr per jaehrlichem Hazard-Wurf,
+    # sondern wenn sein Alter die Spanne erreicht: der Tod ist ab der ersten Stunde
+    # terminiert, und das TOD_FIGUR-Event nennt als Faktor genau das (Alter/Spanne = 1).
+    # Die Spannen sind gegenueber dem Hazard-Modell gesenkt, damit die mittlere
+    # Regierungszeit gleich bleibt (der Hazard toetete im Mittel vor der Spanne).
+    ruler_lifespan_min: int = 38
+    ruler_lifespan_max: int = 62
     ruler_accession_age_min: int = 18
     ruler_accession_age_max: int = 40
-    # Sterbe-Hazard ist 0, bis das Alter diesen Anteil der Lebensspanne erreicht,
-    # dann steigt er linear bis 0.5 an der Lebensspanne (danach sicher).
-    ruler_mortality_onset: float = 0.6
     # Maximaler Betrag eines Herrscher-Trait-Deltas (+/-) auf die Basis-Traits.
     ruler_trait_delta: float = 0.30
-    # Wahrscheinlichkeit, dass kein klarer Erbe existiert (Usurpation/Wahl statt Erbe).
-    heir_uncertainty: float = 0.25
+    # Aenderung 7: der Machtantritt wird nicht mehr gewuerfelt (``heir_uncertainty`` ist
+    # fort — ein Wurf entschied dort, ob ein Reich einen Usurpator bekommt und daran
+    # zerbricht). Er folgt jetzt dem ELITENDRUCK der Nation: ein Adel, der mehr Anwaerter
+    # hat als Aemter, streitet um den Thron. Unter der ersten Schwelle erbt die Dynastie;
+    # darueber muss die Elite den Nachfolger aushandeln (Wahl); ueber der zweiten nimmt
+    # sich eine Faktion die Macht (Usurpation). Damit ist die Sukzessionskrise — und die
+    # Fragmentierung, die aus ihr folgt — endogen: sie hat eine Ursache in der Welt.
+    accession_contested_threshold: float = 1.2  # Elitendruck (gewichtet) ⇒ Wahl
+    accession_usurped_threshold: float = 2.2  # ⇒ Usurpation
     # Anfangs-Legitimitaet je Machtantritt.
     legitimacy_inherited: float = 0.75
     legitimacy_elected: float = 0.55
@@ -431,8 +458,13 @@ class Config:
     # Ab dieser effektiven Aggression beider Herrscher gilt ein Krieg als persoenlich.
     personal_aggression_threshold: float = 0.60
     personal_rivalry_weight: float = 0.30
-    # Wahrscheinlichkeit, dass ein persoenlicher Krieg den Herrscher des Verlierers toetet.
-    personal_death_chance: float = 0.40
+    # Aenderung 7: hier stand eine Wahrscheinlichkeit (0.40, ein Wurf je persoenlichem
+    # Krieg) — und sie entschied ueber Herrschertod ⇒ Sukzession ⇒ Abspaltung, also ueber
+    # den Zerfall von Reichen. Jetzt entscheidet die Wucht der Niederlage: ab diesem
+    # Militaervorteil des Siegers (dem Faktor, der ohnehin in der Schlacht-Begruendung
+    # steht) bleibt der Verlierer-Herrscher auf dem Feld. Gemessen trifft das 36% der
+    # Schlachten persoenlicher Kriege — praktisch die alte Rate, nur eben verdient.
+    personal_death_margin: float = 0.20
 
     # --- identity: EINE Identitaets-/Affinitaetsdimension (Phase 4) --------
     # Anzahl der Anfangs-Identitaeten (< num_nations ⇒ Nationen teilen Glauben).
@@ -484,22 +516,35 @@ class Config:
     tech_production_bonus: float = 0.15
     tech_power_bonus: float = 0.25
 
-    # --- disaster: stochastische Schocks, die Gleichgewichte stoeren -----------
-    # Pest: trifft dichte (grosse) Reiche eher, kostet einen Bevoelkerungsanteil,
-    # kann auf einen Nachbarn ueberspringen (Ansteckung).
-    plague_base_chance: float = 0.010
-    plague_density_scale: float = 2500.0
-    plague_pop_loss: float = 0.30
-    plague_spread_chance: float = 0.40
-    # Erdbeben: zerstoert Wohlstand, etwas Bevoelkerung und vernarbt dauerhaft die
-    # Nahrungskapazitaet der Hauptstadtregion (bleibende geografische Folge).
-    quake_chance: float = 0.012
+    # --- tectonics: der EINE verbliebene exogene Schock (Aenderung 7) ----------
+    # Pest und Duerre sind fort: sie waren reine Wuerfelwuerfe im Ereignispfad und
+    # taten nichts, was die Welt nicht aus sich selbst tut (Bevoelkerung sterben lassen,
+    # Vorraete vernichten). Das Erdbeben bleibt als einziger — weil es als einziges
+    # KEINE soziale Ursache haben kann. Aber auch es wird nicht mehr gewuerfelt:
+    # Gesteinsspannung baut sich Jahr um Jahr auf und entlaedt sich an einer Schwelle
+    # (elastischer Rueckprall — dieselbe Figur wie die politische Spannung). Gezogen
+    # wird allein die GEOLOGIE, und zwar im Worldgen: welche Felder auf einer Verwerfung
+    # liegen und wie schnell sich dort Spannung staut. Der Ereignispfad wuerfelt nicht.
+    seismic_region_fraction: float = 0.35  # Anteil der Felder auf einer Verwerfung
+    # Spannungszuwachs je Jahr = seismicity (0..1) * dieser Satz. Ein voll seismisches
+    # Feld bebt damit alle ~250 Jahre, ein schwach seismisches nie in einem Menschen-
+    # alter — die "sehr niedrige Rate", die das Konzept verlangt.
+    seismic_strain_rate: float = 0.004
+    # Folgen des Bebens: Wohlstand, etwas Bevoelkerung, und eine DAUERHAFTE Narbe in der
+    # Nahrungskapazitaet des Feldes. Die Narbe ist der Hebel, ueber den das Beben in das
+    # Spannungssystem laeuft: zerstoerte Terrassen und Kanaele tragen weniger Muender
+    # ⇒ Hunger ⇒ Volksdruck. Es loest kein fertiges Gross-Ereignis aus, es SETZT Druck —
+    # was daraus wird (Aufstand, Bankrott, gar nichts), entscheidet die Lage der Nation.
+    #
+    # Die Narbe ist mit Aenderung 7 von 0.15 auf 0.45 gestiegen. Gemessen: bei 0.15 war
+    # der Volksdruck der getroffenen Nation 15 Jahre spaeter unveraendert (0.90 -> 0.90)
+    # — das Beben interagierte mit NICHTS und haette nach Ockham ersatzlos gestrichen
+    # gehoert. Ein Beben, das alle paar Jahrhunderte einmal ein Feld trifft, darf dieses
+    # Feld auch wirklich verwuesten: selten und schwer ist die richtige Gestalt (das
+    # Konzept will "selten eine Lawine", §3.3), nicht haeufig und folgenlos.
     quake_wealth_loss: float = 0.60
     quake_pop_loss: float = 0.05
-    quake_capacity_scar: float = 0.15
-    # Duerre: vernichtet den Nahrungsvorrat und kostet direkt Bevoelkerung.
-    drought_chance: float = 0.015
-    drought_pop_loss: float = 0.08
+    quake_capacity_scar: float = 0.45
 
     # --- Wendepunkt-Erkennung & Zeitalter (Phase 5) ---------------------------
     # Machtranking: der neue Hegemon muss den alten um diese Marge uebertreffen

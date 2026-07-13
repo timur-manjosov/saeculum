@@ -45,6 +45,7 @@ from worldsim.models import (
     Identity,
     NationTraits,
     Polity,
+    Region,
     Relation,
     Ruler,
     Stocks,
@@ -54,7 +55,7 @@ from worldsim.models import (
     World,
 )
 from worldsim.names import make_name
-from worldsim.rng import Stream
+from worldsim.rng import Rng, Stream
 
 __all__ = [
     "System",
@@ -65,7 +66,6 @@ __all__ = [
     "demografie",
     "dependency",
     "diplomacy",
-    "disaster",
     "epoch",
     "favor",
     "forge_ruler",
@@ -80,6 +80,7 @@ __all__ = [
     "research",
     "ruler",
     "spannung",
+    "tectonics",
     "tension",
     "trade",
 ]
@@ -220,7 +221,7 @@ def ruler(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     # Fragmentierung neu entstandene Polity wird erst naechstes Jahr verarbeitet.
     for pid in sorted(world.polities):
         pol = world.polities[pid]
-        death_event = _age_and_maybe_die(world, pol, rng, cfg, log)
+        death_event = _age_and_maybe_die(world, pol, cfg, log)
         current = world.rulers.get(pol.leader) if pol.leader is not None else None
         if current is not None and current.alive:
             continue
@@ -236,32 +237,37 @@ def ruler(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
 
 
 def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """Territorium erzeugt die drei Bestaende; die Getreideernte schwankt jaehrlich.
+    """Territorium erzeugt die drei Bestaende — ohne einen einzigen Wuerfelwurf.
 
-    Getreide waechst mit der Nahrungskapazitaet des Territoriums (Ernteschwankung
-    ist die Hunger-Quelle); Eisen und Gold entstehen aus einfacher Foerderung je
-    Region. Die erreichte Tech-Stufe hebt die Effizienz (Phase 5): fortgeschrittene
-    Reiche holen mehr aus demselben Land.
+    Bis Aenderung 7 schwankte die Ernte jaehrlich per ``rng.uniform`` um die Kapazitaet,
+    und DAS war die Quelle des Hungers: die Hungersnot — und mit ihr der Volksdruck, der
+    Aufstand, der halbe Spannungsapparat — hing letztlich an einem Wurf. Jetzt ist die
+    Ernte, was das Land hergibt, und der Hunger ist **malthusianisch**: die Bevoelkerung
+    waechst logistisch bis an die Tragfaehigkeit und sitzt dann auf der Kante, gerade
+    satt. Faellt die Tragfaehigkeit — verlorenes Land nach einem Krieg oder einer
+    Abspaltung, vernarbte Kapazitaet nach einem Beben —, bleiben die Muender, und das
+    Reich hungert, bis es sich auf sein neues Land zurueckgehungert hat. Die Hungersnot
+    ist damit keine Laune des Wetters mehr, sondern der Preis einer Niederlage.
+
+    Die zweite Schranke ist die **Arbeit** (Liebigsches Minimum, ``labor``): nur Arbeiter
+    bestellen das Feld; wer Soldat oder Adliger wird, isst weiter, erzeugt aber nichts.
+    Sie bindet selten (gemessen: ~1% der Nation-Jahre) — erst wenn eine Nation ihre
+    Arbeiter regelrecht ausgeraeumt hat, wird sie zur zweiten Hungerquelle.
     """
-    low, high = 1.0 - cfg.harvest_variance, 1.0 + cfg.harvest_variance
     for pid in sorted(world.polities):
         pol = world.polities[pid]
         efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
-        harvest = rng.uniform(low, high)
         # Eisen entsteht nur in Regionen mit Vorkommen (Aenderung 5): eisenarme
         # Nationen muessen es importieren oder erobern — die Quelle der Abhaengigkeit.
         iron_regions = sum(1 for r in pol.territory if world.regions[r].iron_rich)
         land = _land_capacity(world, pol, cfg)
-        # Arbeiter erzeugen das Getreide: Ausbeute ist das Minimum aus Land und Arbeit
-        # (Liebigsches Minimum). Genug Arbeiter ⇒ landbegrenzt (wie zuvor); fehlen sie
-        # (starke Militarisierung), sinkt die Ernte.
         required = land * cfg.workers_per_capacity
         workers = _stratum_size(pol, StratumKind.ARBEITER)
         labor = min(1.0, workers / required) if required > 0.0 else 0.0
         s = pol.stocks
         pol.stocks = replace(
             s,
-            getreide=s.getreide + land * harvest * efficiency * labor,
+            getreide=s.getreide + land * efficiency * labor,
             eisen=s.eisen + iron_regions * cfg.iron_per_region * efficiency,
             gold=s.gold + _gold_income(pol, cfg),
         )
@@ -2019,23 +2025,36 @@ def _wage_war(
         f.label == FactorLabel.PERSOENLICHE_RIVALITAET for f in decision.factors
     )
     if personal:
-        _maybe_personal_death(world, loser, battle_id, rng, cfg, log)
+        _maybe_personal_death(world, loser, battle_id, win_margin, rng, cfg, log)
 
 
 def _maybe_personal_death(
     world: World,
     loser: EntityId,
     battle_id: EventId,
+    win_margin: float,
     rng: Stream,
     cfg: Config,
     log: EventLog,
 ) -> None:
-    """In einem persoenlichen Krieg faellt der Herrscher des Verlierers mit Chance.
+    """In einem persoenlichen Krieg faellt der VERNICHTEND geschlagene Herrscher.
 
-    Der Tod wird kausal an die Schlacht gehaengt; die Sukzession erfolgt noch im
-    selben Tick (der ``ruler``-Lauf ist bereits vorbei) ueber den ``war``-Strom,
-    damit kein Tick mit totem Herrscher endet.
+    Aenderung 7: hier stand ein Wuerfel (``personal_death_chance`` = 0.40) — und er
+    entschied ueber eine ganze Kette: Herrschertod ⇒ Sukzession ⇒ (bei schwacher
+    Legitimitaet) Abspaltung. Ein Wurf liess Reiche zerfallen.
+
+    Jetzt entscheidet die Schlacht selbst, und zwar mit einer Groesse, die ohnehin schon
+    in ihrer Begruendung steht: dem **Militaervorteil**, mit dem der Sieger sie gewann.
+    Wer vernichtend geschlagen wird, bleibt auf dem Feld; wer knapp verliert (oder gegen
+    einen glueckhaft siegreichen Schwaecheren), kommt davon. Das TOD_FIGUR-Event traegt
+    beides — die persoenliche Feindschaft und die Wucht der Niederlage —, und damit sagt
+    der Graph, warum dieser Koenig starb.
+
+    Der Tod haengt kausal an der Schlacht; die Sukzession erfolgt noch im selben Tick
+    (der ``ruler``-Lauf ist vorbei), damit kein Tick mit totem Herrscher endet.
     """
+    if win_margin < cfg.personal_death_margin:
+        return  # knapp geschlagen: der Koenig entkommt
     pol = world.polities[loser]
     rid = pol.leader
     if rid is None:
@@ -2043,15 +2062,16 @@ def _maybe_personal_death(
     fallen = world.rulers.get(rid)
     if fallen is None or not fallen.alive:
         return
-    if rng.random() >= cfg.personal_death_chance:
-        return
     fallen.alive = False
     death_id = log.append(
         EventDraft(
             year=world.year,
             kind=EventKind.TOD_FIGUR,
             subjects=(loser, rid),
-            factors=(Factor(FactorLabel.PERSOENLICHE_RIVALITAET, 1.0),),
+            factors=(
+                Factor(FactorLabel.PERSOENLICHE_RIVALITAET, 1.0),
+                Factor(FactorLabel.MILITAERVORTEIL, win_margin),
+            ),
             causes=(battle_id,),
             effects=(Effect(rid, "alive", True, False),),
         )
@@ -2067,13 +2087,18 @@ def forge_ruler(
     rng: Stream,
     cfg: Config,
     *,
-    mode: AccessionMode | None = None,
+    mode: AccessionMode,
+    name: str,
 ) -> Ruler:
-    """Erzeuge einen Herrscher deterministisch aus dem Strom (feste Ziehreihenfolge).
+    """Erzeuge einen Herrscher: seine KONSTITUTION, gezogen bei der Geburt.
 
-    Auch von ``worldgen`` fuer die Anfangsherrscher genutzt, damit Anfangs- und
-    Nachfolge-Herrscher dieselbe Konstruktion teilen. ``mode=None`` zieht den
-    Machtantritt (Erbe/Wahl/Usurpation); sonst wird er vorgegeben.
+    Hier — und nur hier — zieht der Ereignispfad noch Zufall (Aenderung 7): Charakter
+    (Trait-Deltas), Lebensspanne und Alter beim Antritt. Das ist kein Ausloeser, sondern
+    eine **Anfangsbedingung**: der Wuerfel entscheidet nicht, DASS etwas geschieht,
+    sondern womit eine neu geborene Entitaet ausgestattet ist — genau die Rolle, die
+    Konzept §0 dem Zufall zuweist (Worldgen zieht die Traits einer Nation auf dieselbe
+    Weise). Der Machtantritt wird NICHT mehr gezogen (er folgt dem Elitendruck, siehe
+    ``_accession_for``), und der Name kommt von aussen aus dem kosmetischen Strom.
     """
     d = cfg.ruler_trait_delta
     deltas = NationTraits(
@@ -2086,9 +2111,6 @@ def forge_ruler(
     )
     lifespan = rng.randint(cfg.ruler_lifespan_min, cfg.ruler_lifespan_max)
     age = rng.randint(cfg.ruler_accession_age_min, cfg.ruler_accession_age_max)
-    if mode is None:
-        mode = _draw_accession(rng, cfg)
-    name = make_name(rng)
     return Ruler(
         id=ruler_id,
         name=name,
@@ -2098,6 +2120,18 @@ def forge_ruler(
         accession=mode,
         legitimacy=_legitimacy_for(mode, cfg),
     )
+
+
+def _cosmetic_name(world: World, entity_id: EntityId) -> str:
+    """Ein Name aus dem KOSMETISCHEN Strom, stabil an der id der Entitaet.
+
+    Der Determinismus-Vertrag verlangt, dass Flavour den Entscheidungspfad nie beruehrt
+    — bis Aenderung 7 zog ``make_name`` aber aus dem SEMANTISCHEN Strom des Systems.
+    Damit verschob der Name eines Herrschers alle folgenden Ziehungen: haette jemand die
+    Silbenliste geaendert, waere eine andere Geschichte herausgekommen. Jetzt haengt der
+    Name an (Seed, id) in einem eigenen Namensraum und kann nichts mehr verschieben.
+    """
+    return make_name(Rng(world.seed).cosmetic_stream(f"name:{entity_id}"))
 
 
 def _effective_traits(world: World, pol: Polity) -> NationTraits:
@@ -2122,9 +2156,17 @@ def _effective_traits(world: World, pol: Polity) -> NationTraits:
 
 
 def _age_and_maybe_die(
-    world: World, pol: Polity, rng: Stream, cfg: Config, log: EventLog
+    world: World, pol: Polity, cfg: Config, log: EventLog
 ) -> EventId | None:
-    """Altere den Herrscher um ein Jahr; bei Hazard-Treffer Tod-Event emittieren."""
+    """Altere den Herrscher um ein Jahr; erreicht er seine Lebensspanne, stirbt er.
+
+    Aenderung 7: kein jaehrlicher Sterbe-Wurf mehr. Die Lebensspanne wird bei der GEBURT
+    des Herrschers gezogen (seine Konstitution, eine Anfangsbedingung) — der Tod ist von
+    da an terminiert. Der Unterschied ist nicht kosmetisch: vorher entschied ein Wurf im
+    Ereignispfad, WANN eine Dynastie bricht, und daran hingen Sukzession, Schisma und
+    Fragmentierung. Jetzt steht es von der ersten Stunde an fest, und der Faktor des
+    Todes-Events sagt genau das (Alter/Spanne = 1).
+    """
     rid = pol.leader
     if rid is None:
         return None
@@ -2132,7 +2174,7 @@ def _age_and_maybe_die(
     if r is None or not r.alive:
         return None
     r.age += 1
-    if rng.random() >= _death_probability(r, cfg):
+    if r.age < r.lifespan:
         return None
     r.alive = False
     return log.append(
@@ -2144,16 +2186,6 @@ def _age_and_maybe_die(
             effects=(Effect(rid, "alive", True, False),),
         )
     )
-
-
-def _death_probability(r: Ruler, cfg: Config) -> float:
-    """Sterbe-Hazard: 0 bis zum Onset, dann linear bis 0.5, ab Lebensspanne sicher."""
-    if r.age >= r.lifespan:
-        return 1.0
-    onset = r.lifespan * cfg.ruler_mortality_onset
-    if r.age < onset:
-        return 0.0
-    return 0.5 * (r.age - onset) / (r.lifespan - onset)
 
 
 def _succeed(
@@ -2168,12 +2200,18 @@ def _succeed(
 ) -> tuple[EventId, Ruler]:
     """Setze einen Nachfolger ein und emittiere das SUKZESSION-Event (caused-by Tod).
 
-    ``mode=None`` zieht den Machtantritt (Erbe/Wahl/Usurpation) — der Normalfall nach
-    einem natuerlichen Tod. Ein Putsch (Aenderung 6) gibt ihn vor: wer sich an die
-    Macht putscht, ist ein Usurpator und traegt dessen schwache Legitimitaet.
+    ``mode=None`` LEITET den Machtantritt aus dem Elitendruck ab (Aenderung 7; vorher
+    wurde er gewuerfelt) — der Normalfall nach einem natuerlichen Tod. Ein Putsch
+    (Aenderung 6) gibt ihn vor: wer sich an die Macht putscht, ist ein Usurpator und
+    traegt dessen schwache Legitimitaet.
     """
     old = world.rulers.get(pol.leader) if pol.leader is not None else None
-    new = forge_ruler(world.next_id, rng, cfg, mode=mode)
+    contest = Decision()
+    if mode is None:
+        mode, contest = _accession_for(pol, cfg)
+    new = forge_ruler(
+        world.next_id, rng, cfg, mode=mode, name=_cosmetic_name(world, world.next_id)
+    )
     world.next_id += 1
     # Wendepunkt-Flag: grosser Trait-Sprung gegenueber dem Vorgaenger.
     new.turning_point = (
@@ -2182,12 +2220,14 @@ def _succeed(
     world.rulers[new.id] = new
     pol.leader = new.id
 
-    # Die Faktoren beschreiben das Fundament der neuen Herrschaft (kein Gate).
+    # Die Faktoren beschreiben das Fundament der neuen Herrschaft (kein Gate) — und,
+    # wenn der Thron umstritten war, den Druck, der ihn umstritten machte.
     factors = [Factor(FactorLabel.LEGITIMITAET, new.legitimacy)]
     if new.accession == AccessionMode.INHERITED:
         factors.append(Factor(FactorLabel.ERBFOLGE, 1.0))
     else:
         factors.append(Factor(FactorLabel.THRONSTREIT, 1.0))
+    factors.extend(contest.as_factors())
     effects = [Effect(new.id, "accession", None, str(new.accession))]
     if new.turning_point:
         effects.append(Effect(new.id, "wendepunkt", None, True))
@@ -2205,11 +2245,28 @@ def _succeed(
     return succ_id, new
 
 
-def _draw_accession(rng: Stream, cfg: Config) -> AccessionMode:
-    """Ziehe den Machtantritt: meist Erbe, bei Unsicherheit Usurpation/Wahl."""
-    if rng.random() < cfg.heir_uncertainty:
-        return AccessionMode.USURPED if rng.random() < 0.5 else AccessionMode.ELECTED
-    return AccessionMode.INHERITED
+def _accession_for(pol: Polity, cfg: Config) -> tuple[AccessionMode, Decision]:
+    """Wie kommt der Nachfolger auf den Thron? Der ELITENDRUCK entscheidet (Aenderung 7).
+
+    Hier zog frueher ein Wuerfel (``heir_uncertainty``), und er entschied ueber weit mehr
+    als eine Formalie: ein umstrittener Antritt bringt einen Herrscher mit schwacher
+    Legitimitaet — und an der zerbricht in ``_maybe_fragment`` das Reich. Ein Wurf liess
+    also Imperien zerfallen, ohne dass jemand sagen konnte, warum.
+
+    Jetzt sagt es der Adel. Hat er mehr Anwaerter als Aemter (Elitendruck, Aenderung 6),
+    streitet er um den Thron: wenig Druck ⇒ die Dynastie erbt; viel ⇒ die Elite handelt
+    einen Nachfolger aus (Wahl); sehr viel ⇒ eine Faktion nimmt sich die Macht
+    (Usurpation). Die zurueckgegebene Faktorliste haengt am SUKZESSION-Event — sie IST
+    die Begruendung, warum dieser Thronwechsel strittig war, und sie macht die
+    Sukzessionskrise zu dem, was sie immer sein sollte: einem Symptom.
+    """
+    decision = Decision()
+    decision.add(FactorLabel.ELITENDRUCK, pol.tension.elite)
+    if decision.score >= cfg.accession_usurped_threshold:
+        return AccessionMode.USURPED, decision
+    if decision.score >= cfg.accession_contested_threshold:
+        return AccessionMode.ELECTED, decision
+    return AccessionMode.INHERITED, decision
 
 
 def _legitimacy_for(mode: AccessionMode, cfg: Config) -> float:
@@ -2385,7 +2442,13 @@ def _secede(
 
     new_pid = world.next_id
     world.next_id += 1
-    new_ruler = forge_ruler(world.next_id, rng, cfg, mode=AccessionMode.USURPED)
+    new_ruler = forge_ruler(
+        world.next_id,
+        rng,
+        cfg,
+        mode=AccessionMode.USURPED,
+        name=_cosmetic_name(world, world.next_id),
+    )
     world.next_id += 1
     world.rulers[new_ruler.id] = new_ruler
 
@@ -2415,7 +2478,7 @@ def _secede(
 
     new_pol = Polity(
         id=new_pid,
-        name=make_name(rng),
+        name=_cosmetic_name(world, new_pid),
         capital=new_capital,
         territory=tuple(sorted(blob)),
         founded_year=world.year,
@@ -2583,7 +2646,9 @@ def _maybe_schisma(
 
     new_id = world.next_id
     world.next_id += 1
-    world.identities[new_id] = Identity(id=new_id, name=make_name(rng), parent=old_faith)
+    world.identities[new_id] = Identity(
+        id=new_id, name=_cosmetic_name(world, new_id), parent=old_faith
+    )
     pol.identity_id = new_id
 
     log.append(
@@ -2644,107 +2709,70 @@ def research(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     return world
 
 
-def disaster(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
-    """3 behavioral unterschiedliche Schocks, die Gleichgewichte stoeren.
+def tectonics(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
+    """Der EINE verbliebene exogene Schock — und auch er wird nicht gewuerfelt.
 
-    Pest (Bevoelkerung, ansteckend auf einen Nachbarn), Erdbeben (Wohlstand +
-    dauerhafte Kapazitaets-Narbe der Hauptstadt) und Duerre (Nahrungsvorrat +
-    Bevoelkerung). Jeder Schock ist ein exogener Wurzel-Event; spaetere Ereignisse
-    (Machtverschiebungen) verweisen kausal auf ihn (siehe ``epoch``).
+    Aenderung 7 raeumt das alte Katastrophen-System ab. Pest und Duerre waren reine
+    Wuerfelwuerfe im Ereignispfad: "weil der Wuerfel es sagte, starb ein Drittel des
+    Volkes". Sie sind fort, und sie fehlen nicht — was sie taten (Bevoelkerung toeten,
+    Vorraete vernichten), tut die Welt aus sich selbst: Hungersnot aus Uebervoelkerung,
+    Mobilmachung und verlorenem Land (siehe ``production``), Verluste aus Krieg,
+    Aufstand und Kollaps.
+
+    Das Erdbeben bleibt, denn es ist der einzige Schock, der KEINE soziale Ursache haben
+    kann — Geologie fragt nicht nach Politik (Konzept §5 erlaubt genau das). Aber es
+    faellt nicht mehr vom Himmel: unter einem Feld auf einer Verwerfung staut sich Jahr
+    um Jahr Spannung, und an der Schwelle bricht sie (elastischer Rueckprall). Dieselbe
+    Figur wie ueberall in dieser Welt — Aufbau, Schwelle, Entladung —, nur dass der Stau
+    hier im Gestein sitzt. Gezogen wird allein die Geologie, und zwar im Worldgen: das
+    Beben ist damit eine Anfangsbedingung, die faellig wird, kein Wurf des Jahres.
+
+    Und seine FOLGEN laufen durch das Spannungssystem: es loest kein fertiges
+    Gross-Ereignis aus, es SETZT Druck — der leere Schatz treibt den Fiskaldruck, die
+    vernarbte Kapazitaet den Hunger und damit den Volksdruck. Was daraus wird (Bankrott,
+    Aufstand, gar nichts), entscheidet die Lage der Nation, nicht das Beben.
     """
-    for pid in sorted(world.polities):
-        pol = world.polities[pid]
-        density = bevoelkerung(pol) / cfg.plague_density_scale
-        if rng.random() < cfg.plague_base_chance * (1.0 + density):
-            _strike_plague(world, pid, rng, cfg, log, source=None)
-        if rng.random() < cfg.quake_chance:
-            _strike_quake(world, pid, cfg, log)
-        if rng.random() < cfg.drought_chance:
-            _strike_drought(world, pid, cfg, log)
+    for rid in sorted(world.regions):
+        region = world.regions[rid]
+        if region.seismicity <= 0.0:
+            continue
+        region.strain += region.seismicity * cfg.seismic_strain_rate
+        if region.strain >= 1.0:
+            _quake(world, region, cfg, log)
     return world
 
 
-def _strike_plague(
-    world: World,
-    pid: EntityId,
-    rng: Stream,
-    cfg: Config,
-    log: EventLog,
-    source: EventId | None,
-) -> None:
-    """Pest: Bevoelkerungsverlust; der Ausbruch kann auf einen Nachbarn ueberspringen."""
-    pol = world.polities[pid]
-    before = bevoelkerung(pol)
-    loss = int(before * cfg.plague_pop_loss)
-    if loss <= 0:
-        return
-    pol.strata = _scaled_strata(pol.strata, 1.0 - cfg.plague_pop_loss)
-    plague_id = log.append(
-        EventDraft(
-            year=world.year,
-            kind=EventKind.PEST,
-            subjects=(pid,),
-            factors=(Factor(FactorLabel.PEST, float(loss)),),
-            causes=(source,) if source is not None else (),
-            effects=(Effect(pid, "population", before, bevoelkerung(pol)),),
-        )
-    )
-    # Nur der urspruengliche Ausbruch steckt weiter an (keine endlose Kaskade).
-    if source is not None:
-        return
-    for other in _bordering_nations(world, pol):
-        if rng.random() < cfg.plague_spread_chance:
-            _strike_plague(world, other, rng, cfg, log, source=plague_id)
-            break
+def _quake(world: World, region: Region, cfg: Config, log: EventLog) -> None:
+    """Die Spannung im Gestein entlaedt sich: Narbe im Land, Schaden fuer den Besitzer."""
+    strain_before = region.strain
+    region.strain = 0.0
+    cap_before = region.food_capacity
+    region.food_capacity = cap_before * (1.0 - cfg.quake_capacity_scar)
 
-
-def _strike_quake(world: World, pid: EntityId, cfg: Config, log: EventLog) -> None:
-    """Erdbeben: zerstoert Wohlstand/Bevoelkerung und vernarbt die Hauptstadt-Kapazitaet."""
-    pol = world.polities[pid]
-    gold_before = pol.stocks.gold
-    pop_before = bevoelkerung(pol)
-    pol.stocks = replace(pol.stocks, gold=gold_before * (1.0 - cfg.quake_wealth_loss))
-    pol.strata = _scaled_strata(pol.strata, 1.0 - cfg.quake_pop_loss)
-    effects = [
-        Effect(pid, "gold", gold_before, pol.stocks.gold),
-        Effect(pid, "population", pop_before, bevoelkerung(pol)),
-    ]
-    subjects: tuple[EntityId, ...] = (pid,)
-    cap = pol.capital
-    if cap is not None:
-        region = world.regions[cap]
-        cap_before = region.food_capacity
-        region.food_capacity = cap_before * (1.0 - cfg.quake_capacity_scar)
-        effects.append(Effect(cap, "food_capacity", cap_before, region.food_capacity))
-        subjects = (pid, cap)
+    subjects: tuple[EntityId, ...] = (region.id,)
+    effects = [Effect(region.id, "food_capacity", cap_before, region.food_capacity)]
+    # Ein Beben im unbesiedelten Land vernarbt nur die Erde — es gibt niemanden, den es
+    # trifft. Wer das Feld spaeter nimmt, erbt die Narbe.
+    owner = region.owner
+    if owner is not None and owner in world.polities:
+        pol = world.polities[owner]
+        gold_before = pol.stocks.gold
+        pop_before = bevoelkerung(pol)
+        pol.stocks = replace(pol.stocks, gold=gold_before * (1.0 - cfg.quake_wealth_loss))
+        pol.strata = _scaled_strata(pol.strata, 1.0 - cfg.quake_pop_loss)
+        subjects = (owner, region.id)
+        effects += [
+            Effect(owner, "gold", gold_before, pol.stocks.gold),
+            Effect(owner, "population", pop_before, bevoelkerung(pol)),
+        ]
     log.append(
         EventDraft(
             year=world.year,
             kind=EventKind.ERDBEBEN,
             subjects=subjects,
-            factors=(Factor(FactorLabel.ERDBEBEN, gold_before * cfg.quake_wealth_loss),),
+            # Die Begruendung ist die aufgestaute Spannung selbst — kein "Zufall".
+            factors=(Factor(FactorLabel.ERDSPANNUNG, strain_before),),
             effects=tuple(effects),
-        )
-    )
-
-
-def _strike_drought(world: World, pid: EntityId, cfg: Config, log: EventLog) -> None:
-    """Duerre: vernichtet den Nahrungsvorrat und kostet direkt Bevoelkerung."""
-    pol = world.polities[pid]
-    grain_before = pol.stocks.getreide
-    pop_before = bevoelkerung(pol)
-    pol.stocks = replace(pol.stocks, getreide=0.0)
-    pol.strata = _scaled_strata(pol.strata, 1.0 - cfg.drought_pop_loss)
-    log.append(
-        EventDraft(
-            year=world.year,
-            kind=EventKind.DUERRE,
-            subjects=(pid,),
-            factors=(Factor(FactorLabel.DUERRE, grain_before),),
-            effects=(
-                Effect(pid, "getreide", grain_before, 0.0),
-                Effect(pid, "population", pop_before, bevoelkerung(pol)),
-            ),
         )
     )
 
@@ -2933,7 +2961,7 @@ def _recent_setback(
     disasters: list[EventId] = []
     defeats: list[EventId] = []
     splits: list[EventId] = []
-    shock_kinds = {EventKind.PEST, EventKind.ERDBEBEN, EventKind.DUERRE}
+    shock_kinds = {EventKind.ERDBEBEN}
     for event in log.by_subject(pid):
         if world.year - event.year > window:
             continue

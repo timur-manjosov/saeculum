@@ -180,7 +180,7 @@ def wichtigkeit(
             factors = (Factor(FactorLabel.BEKEHRUNG, 3.0),)
         case EventKind.SCHISMA:
             factors = (Factor(FactorLabel.GLAUBENSSPALTUNG, 4.5),)
-        case EventKind.PEST | EventKind.ERDBEBEN | EventKind.DUERRE:
+        case EventKind.ERDBEBEN:
             deaths = _population_loss(event.effects)
             factors = (Factor(FactorLabel.KATASTROPHE, 1.5 + deaths / 60.0),)
         case EventKind.INNOVATION:
@@ -347,7 +347,7 @@ def weltbilanz(world: World, log: EventLog, *, max_figuren: int = 5) -> Weltbila
     Identitaet. Praegende Figuren = Herrscher, deren Sukzession als Wendepunkt
     markiert wurde (die letzten ``max_figuren`` chronologisch).
     """
-    shocks = (EventKind.PEST, EventKind.ERDBEBEN, EventKind.DUERRE)
+    shocks = (EventKind.ERDBEBEN,)
 
     if world.polities:
         largest = max(
@@ -518,20 +518,12 @@ def _narrate(world: World, event: Event, log: EventLog) -> str:
                 f"Year {event.year}: the {new_faith} faith schismed from the "
                 f"{old_faith} faith within {nation}."
             )
-        case EventKind.PEST:
-            deaths = _population_loss(event.effects)
-            spread = bool(event.causes)
-            verb = "spread to" if spread else "struck"
-            return f"Year {event.year}: a plague {verb} {nation}, killing {deaths}."
         case EventKind.ERDBEBEN:
             deaths = _population_loss(event.effects)
             return (
                 f"Year {event.year}: an earthquake devastated {nation}, "
                 f"killing {deaths} and ruining its wealth."
             )
-        case EventKind.DUERRE:
-            deaths = _population_loss(event.effects)
-            return f"Year {event.year}: a drought parched {nation}, killing {deaths}."
         case EventKind.INNOVATION:
             age = _tech_age(event.effects)
             return f"Year {event.year}: {nation} advanced into {age}."
@@ -650,9 +642,7 @@ def _schisma_cause(log: EventLog, event: Event) -> Event | None:
 
 
 _DISASTER_WORDS: dict[EventKind, str] = {
-    EventKind.PEST: "plague",
     EventKind.ERDBEBEN: "earthquake",
-    EventKind.DUERRE: "drought",
 }
 
 

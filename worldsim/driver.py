@@ -32,7 +32,6 @@ from worldsim.systems import (
     consumption,
     demografie,
     diplomacy,
-    disaster,
     epoch,
     forge_ruler,
     founding,
@@ -44,6 +43,7 @@ from worldsim.systems import (
     production,
     research,
     ruler,
+    tectonics,
     tension,
     trade,
 )
@@ -85,8 +85,13 @@ SYSTEMS: list[tuple[str, System]] = [
     # Am Tick-Ende: Glaubensausbreitung (Konversion) und Schisma. Die Affinitaets-
     # Faktoren in Diplomatie/Krieg lesen die Identitaeten des Vorjahres.
     ("identity", identity),
-    # Danach exogene Schocks (Pest/Erdbeben/Duerre), die Gleichgewichte stoeren ...
-    ("disaster", disaster),
+    # Danach der einzige verbliebene exogene Schock (Aenderung 7): das Erdbeben, das
+    # sich als Gesteinsspannung aufstaut und an einer Schwelle bricht. Es steht VOR dem
+    # Wendepunkt-Waechter, damit dieser es noch als nahe Ursache eines Niedergangs
+    # zitieren kann — seine eigentliche Wirkung entfaltet es aber erst im naechsten
+    # Jahr, durch das Spannungssystem (leerer Schatz ⇒ Fiskaldruck, vernarbtes Land
+    # ⇒ Hunger ⇒ Volksdruck). Es loest nichts aus, es setzt Druck.
+    ("tectonics", tectonics),
     # ... und zuletzt die Wendepunkt-Waechter, die den Ausgang des Jahres deuten.
     ("epoch", epoch),
 ]
@@ -172,8 +177,11 @@ def worldgen(master: Rng, cfg: Config) -> World:
         rid: EntityId = ruler_base + n
         capital = capitals[n]
         regions[capital].owner = pid
-        # Anfangsherrscher gruenden eine Dynastie ⇒ Erbfolge-Legitimitaet.
-        rulers[rid] = forge_ruler(rid, gen, cfg, mode=AccessionMode.INHERITED)
+        # Anfangsherrscher gruenden eine Dynastie ⇒ Erbfolge-Legitimitaet. Der Name kommt
+        # aus dem kosmetischen Strom, die Konstitution aus dem semantischen.
+        rulers[rid] = forge_ruler(
+            rid, gen, cfg, mode=AccessionMode.INHERITED, name=make_name(cos)
+        )
         polities[pid] = Polity(
             id=pid,
             name=make_name(cos),
@@ -199,9 +207,14 @@ def worldgen(master: Rng, cfg: Config) -> World:
     # Eisenvorkommen ganz zuletzt verteilen (wie die Lage), damit alle vorherigen
     # Ziehungen unveraendert bleiben und die Welt nur die Eisen-Geografie gewinnt.
     _assign_iron_deposits(regions, gen, cfg)
+    # Und die Geologie (Aenderung 7): welche Felder auf einer Verwerfung liegen. Sie ist
+    # der GANZE Zufall, der noch im Erdbeben steckt — der Ereignispfad wuerfelt nicht
+    # mehr, er laesst nur faellig werden, was hier gezogen wurde.
+    _assign_seismicity(regions, gen, cfg)
 
     return World(
         year=0,
+        seed=master.seed,  # nur fuer den KOSMETISCHEN Strom (Namen), nie fuer Fakten
         regions=regions,
         polities=polities,
         rulers=rulers,
@@ -252,6 +265,25 @@ def _place_regions(regions: dict[EntityId, Region], gen: Stream) -> None:
     """
     for rid in sorted(regions):
         regions[rid].coord = (gen.random(), gen.random())
+
+
+def _assign_seismicity(
+    regions: dict[EntityId, Region], gen: Stream, cfg: Config
+) -> None:
+    """Verteile die Verwerfungen: welche Felder stauen Gesteinsspannung, und wie schnell.
+
+    Aenderung 7: das ist der GANZE Zufall, der im Erdbeben noch steckt — eine
+    Anfangsbedingung wie die Nahrungskapazitaet oder das Eisen. Der Tick wuerfelt danach
+    nicht mehr: er laesst nur faellig werden, was hier verteilt wurde.
+
+    ``strain`` startet ebenfalls gezogen. Das ist die Phase: ohne sie beben alle
+    Verwerfungen dieser Welt zum ersten Mal im Gleichschritt, was kein Erdbeben mehr
+    waere, sondern ein Weltuntergang mit Fahrplan.
+    """
+    for rid in sorted(regions):
+        if gen.random() < cfg.seismic_region_fraction:
+            regions[rid].seismicity = gen.random()
+            regions[rid].strain = gen.random()
 
 
 def _assign_iron_deposits(

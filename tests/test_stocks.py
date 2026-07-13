@@ -56,7 +56,6 @@ def test_grain_surplus_drives_growth() -> None:
     fertile = Config(
         region_food_capacity_min=40.0,
         region_food_capacity_max=60.0,
-        harvest_variance=0.05,
     )
     world, log = simulate(seed=42, years=100, cfg=fertile)
     assert any(e.kind == EventKind.BEVOELKERUNG_MEILENSTEIN for e in log)
@@ -65,11 +64,14 @@ def test_grain_surplus_drives_growth() -> None:
 
 
 def test_grain_shortage_drives_famine() -> None:
-    """Getreidemangel treibt Hunger: HUNGERSNOT-Events kosten Bevoelkerung."""
+    """Getreidemangel treibt Hunger: HUNGERSNOT-Events kosten Bevoelkerung.
+
+    Aenderung 7: der Mangel wird nicht mehr gewuerfelt (die Ernteschwankung ist fort).
+    Karges Land traegt die Anfangsbevoelkerung schlicht nicht — Malthus, kein Wetter.
+    """
     barren = Config(
-        region_food_capacity_min=5.0,
-        region_food_capacity_max=8.0,
-        harvest_variance=0.9,
+        region_food_capacity_min=2.0,
+        region_food_capacity_max=3.0,
         initial_getreide=0.0,
     )
     _, log = simulate(seed=5, years=120, cfg=barren)

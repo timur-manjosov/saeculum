@@ -80,7 +80,7 @@ class VisualEffect:
 # Akzente tragen Bedeutung:
 #   love  → Konflikt (Krieg, Schlacht, Bruch)
 #   gold  → Not & Reibung (Hungersnot, Spannung)
-#   rose  → akute Katastrophe (Pest, Erdbeben, Duerre)
+#   rose  → akute Katastrophe (Erdbeben)
 #   pine  → Wachstum & Bindung (Gruendung, Expansion, Buendnis, Bevoelkerung)
 #   foam  → Wissen (Innovation/Werk)
 #   iris  → Dynastie, Spaltung, Glaube (Sukzession, Abspaltung, Konversion/Schisma)
@@ -112,9 +112,7 @@ _KIND_TO_VISUAL: dict[EventKind, VisualKind] = {
     EventKind.KRIEG: VisualKind.KRIEG,
     EventKind.BUENDNIS: VisualKind.BUENDNIS,
     EventKind.BUENDNIS_BRUCH: VisualKind.BRUCH,
-    EventKind.PEST: VisualKind.KATASTROPHE,
     EventKind.ERDBEBEN: VisualKind.KATASTROPHE,
-    EventKind.DUERRE: VisualKind.KATASTROPHE,
     EventKind.HUNGERSNOT: VisualKind.HUNGER,
     EventKind.KONVERSION: VisualKind.GLAUBE,
     EventKind.SCHISMA: VisualKind.GLAUBE,

@@ -104,8 +104,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 def _share_footer(args: argparse.Namespace, world: World, log: EventLog, cfg: Config) -> str:
     """Fusszeile: Kennzahlen plus der exakte Befehl, um die Welt zu reproduzieren."""
-    shocks = (EventKind.PEST, EventKind.ERDBEBEN, EventKind.DUERRE)
-    disasters = sum(1 for e in log if e.kind in shocks)
+    disasters = sum(1 for e in log if e.kind is EventKind.ERDBEBEN)
     turning_points = sum(1 for e in log if e.kind == EventKind.WENDEPUNKT)
     return (
         "-" * 60 + "\n"

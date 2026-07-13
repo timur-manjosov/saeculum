@@ -393,21 +393,28 @@ def test_trade_dependency_wars_emerge_in_the_simulation() -> None:
 
     Handelsnetze entstehen (dependency-Kanten fuellen sich), und mancher Krieg
     fuehrt die Abhaengigkeit als echten, spuerbaren Faktor — kein Rauschen.
-    """
-    world, log = simulate(seed=7, years=250)
-    # Handelsnetze: die dependency-Matrix ist gefuellt.
-    assert any(rel.dependency > 0.0 for rel in world.relations.values())
 
-    wars = [e for e in log if e.kind == EventKind.KRIEG]
-    dep_wars = [
-        e for e in wars if any(f.label == FactorLabel.HANDELSABHAENGIGKEIT for f in e.factors)
-    ]
-    assert dep_wars  # Krieg aus Handelsverflechtung tritt auf
-    # Und wenigstens einer traegt die Abhaengigkeit als gewichtigen Mit-Antrieb.
-    strongest = max(
-        f.weight
-        for e in dep_wars
-        for f in e.factors
-        if f.label == FactorLabel.HANDELSABHAENGIGKEIT
-    )
-    assert strongest > 0.2
+    Ueber mehrere Laeufe geprueft: DASS der Handelskrieg auftritt, gilt in jedem Seed —
+    wie SCHWER die Abhaengigkeit dabei woegt, haengt daran, ob eine Nation gerade von
+    einem gefaehrlichen Lieferanten abhaengt, und das ist Sache der Geografie. Ein Test
+    an einem einzigen Seed misst diesen Spitzenwert und damit vor allem Glueck.
+    """
+    seen = 0
+    for seed in (7, 42, 1234, 99):
+        world, log = simulate(seed=seed, years=250)
+        # Handelsnetze: die dependency-Matrix ist gefuellt.
+        assert any(rel.dependency > 0.0 for rel in world.relations.values())
+
+        dep_wars = [
+            e
+            for e in log.by_kind(EventKind.KRIEG)
+            if any(f.label == FactorLabel.HANDELSABHAENGIGKEIT for f in e.factors)
+        ]
+        assert dep_wars  # Krieg aus Handelsverflechtung tritt in JEDEM Lauf auf
+        seen += sum(
+            1
+            for e in dep_wars
+            for f in e.factors
+            if f.label == FactorLabel.HANDELSABHAENGIGKEIT and f.weight > 0.2
+        )
+    assert seen  # und irgendwo traegt sie den Krieg als gewichtiger Mit-Antrieb

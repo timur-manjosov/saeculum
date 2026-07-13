@@ -76,7 +76,7 @@ def test_visual_kinds_match_intent() -> None:
     # Abspaltung ist eine dynastische Spaltung ⇒ violett (``iris``), nicht gruen.
     if EventKind.ABSPALTUNG in by_kind:
         assert by_kind[EventKind.ABSPALTUNG].color == ROSE_PINE_MOON.iris
-    for shock in (EventKind.PEST, EventKind.ERDBEBEN, EventKind.DUERRE):
+    for shock in (EventKind.ERDBEBEN,):
         if shock in by_kind:
             assert by_kind[shock].flash is True
 
@@ -115,7 +115,7 @@ def test_replay_incremental_matches_full_playback() -> None:
 def test_why_event_traverses_causes_backwards() -> None:
     """Kausalkette e2→e1→e0: die Ausgabe erreicht die Wurzel, Ursachen sind frueher."""
     log = EventLog()
-    e0 = log.append(EventDraft(year=0, kind=EventKind.PEST, subjects=(1,)))
+    e0 = log.append(EventDraft(year=0, kind=EventKind.ERDBEBEN, subjects=(1,)))
     e1 = log.append(EventDraft(year=1, kind=EventKind.KRIEG, subjects=(1, 2), causes=(e0,)))
     e2 = log.append(EventDraft(year=2, kind=EventKind.SCHLACHT, subjects=(2, 1), causes=(e1,)))
 
@@ -133,7 +133,7 @@ def test_why_event_traverses_causes_backwards() -> None:
 def test_why_event_root_has_no_cause_note() -> None:
     """Ein Wurzel-Event (ohne Ursachen) meldet ehrlich, dass es keine Ursache hat."""
     log = EventLog()
-    e0 = log.append(EventDraft(year=0, kind=EventKind.PEST, subjects=(1,)))
+    e0 = log.append(EventDraft(year=0, kind=EventKind.ERDBEBEN, subjects=(1,)))
     lines = warum_event(World(), log, e0)
     assert any("root event" in line for line in lines)
 
@@ -342,17 +342,26 @@ def test_explore_traces_collapse_and_zooms_into_causes() -> None:
 
 
 def test_explore_shows_entity_biography() -> None:
-    """Eine Entitaet waehlen ⇒ ihr Lebenslauf (alle Events mit ihr im Subjekt)."""
+    """Eine Entitaet waehlen ⇒ ihr Lebenslauf (alle Events mit ihr im Subjekt).
+
+    Jede Biographie oeffnet mit der GEBURT der Nation — und die hat zwei Gestalten, seit
+    Reiche zerbrechen koennen: eine Nation der Weltgenerierung wurde *gegruendet*, eine
+    aus einer Mutter geborene hat sich *abgespalten* (oder ist aus deren Kollaps
+    hervorgegangen). Beides steht am Anfang ihres Lebenslaufs, und beides ist ein Event
+    mit Ursache — ein zusaetzliches Gruendungs-Event waere eine zweite, ursachenlose
+    Geburt (Aenderung 7: der Graph ist lueckenlos, aber er erzaehlt nichts doppelt).
+    """
     from worldsim.presentation import explore
 
     world, log = simulate(seed=42, years=120)
-    target = max(world.polities.values(), key=lambda p: len(p.territory))
-    console = Console(force_terminal=False, width=100, record=True)
-    explore(world, log, DEFAULT_CONFIG, seed=42, console=console, commands=[f"who {target.name}"])
-    out = console.export_text()
-
-    assert f"life of {target.name}" in out
-    assert "was founded in" in out  # die Gruendung eroeffnet jede Polity-Biographie
+    for target in sorted(world.polities.values(), key=lambda p: -len(p.territory))[:3]:
+        console = Console(force_terminal=False, width=100, record=True)
+        explore(
+            world, log, DEFAULT_CONFIG, seed=42, console=console, commands=[f"who {target.name}"]
+        )
+        out = console.export_text()
+        assert f"life of {target.name}" in out
+        assert "was founded in" in out or "split" in out or "collapsed" in out
 
 
 def test_explore_headless_demo_is_derived_only() -> None:
@@ -422,9 +431,9 @@ def test_factor_and_cause_components_render_readably() -> None:
     assert "Machtwechsel: +1.3" in faktoren.plain
     assert "Furcht: -0.5" in faktoren.plain
 
-    cause = kausal_zeile("Year 3: a plague struck Oreisa.")
+    cause = kausal_zeile("Year 3: an earthquake struck Oreisa.")
     assert cause.plain.strip().startswith("↳")
-    assert "a plague struck Oreisa" in cause.plain
+    assert "an earthquake struck Oreisa" in cause.plain
 
 
 def test_static_shows_indented_why_note_for_turning_points() -> None:

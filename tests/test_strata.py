@@ -81,31 +81,36 @@ def test_grievance_starts_at_zero_and_accumulates() -> None:
 
 
 def test_scarcity_raises_grievance() -> None:
-    """Getreidemangel treibt den Arbeiter-Groll klar ueber das Ungleichheits-Baseline.
+    """Getreidemangel treibt den Arbeiter-Groll (Aenderung 2) — isoliert vom zweiten Treiber.
 
-    Geprueft wird der AUFBAU des Grolls (Aenderung 2), darum ist die Entladung hier
-    stillgelegt (unerreichbare Schwelle): sonst kappte der Aufstand in der kargen Welt
-    genau den Groll, den dieser Test messen will, und der Endstand saege niedriger aus
-    als in der satten. Dass der Mangel auch wirklich zu Aufstaenden fuehrt, prueft
-    ``test_tension.test_scarcity_breeds_uprisings``.
+    Zwei Stellschrauben sind hier stillgelegt, und beide aus einem gemessenen Grund:
+
+    * die **Entladung** (unerreichbare Schwelle): sonst kappte der Aufstand in der kargen
+      Welt genau den Groll, den dieser Test messen will;
+    * die **Ungleichheit** (``grievance_inequality_rate=0``): sie ist der zweite Treiber
+      des Grolls und laeuft in BEIDEN Welten an den Deckel — der Hunger verschwaende
+      unter ihr. Ohne sie misst der Test genau das, was er behauptet: den Hunger.
+
+    Der Mangel selbst wird seit Aenderung 7 nicht mehr gewuerfelt (die Ernteschwankung ist
+    fort). Karges Land traegt die Bevoelkerung nicht, die auf ihm sitzt — das ist der
+    ganze Mechanismus.
     """
-    quiet = Config(tension_threshold=1e9)
+    quiet = Config(tension_threshold=1e9, grievance_inequality_rate=0.0)
     fertile = replace(
         quiet,
         region_food_capacity_min=40.0,
         region_food_capacity_max=60.0,
-        harvest_variance=0.05,
     )
     barren = replace(
         quiet,
-        region_food_capacity_min=5.0,
-        region_food_capacity_max=8.0,
-        harvest_variance=0.9,
+        region_food_capacity_min=2.0,
+        region_food_capacity_max=3.0,
         initial_getreide=0.0,
     )
     wf, _ = simulate(seed=7, years=120, cfg=fertile)
     wb, _ = simulate(seed=7, years=120, cfg=barren)
-    assert _peak_worker_grievance(wb) > _peak_worker_grievance(wf)
+    assert _peak_worker_grievance(wf) == pytest.approx(0.0)  # satt: kein Grund zum Groll
+    assert _peak_worker_grievance(wb) > 0.5  # karg: der Hunger allein treibt ihn
 
 
 def test_soldiers_track_the_target_share() -> None:

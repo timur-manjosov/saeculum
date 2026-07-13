@@ -28,9 +28,7 @@ _SETBACK_KINDS = (
     EventKind.WENDEPUNKT,
     EventKind.ABSPALTUNG,
     EventKind.SCHLACHT,
-    EventKind.PEST,
     EventKind.ERDBEBEN,
-    EventKind.DUERRE,
     EventKind.BUENDNIS_BRUCH,
 )
 

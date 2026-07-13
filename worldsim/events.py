@@ -62,10 +62,12 @@ class EventKind(StrEnum):
     # Phase 4 aktiv (Identitaet/Glaube):
     KONVERSION = "KONVERSION"
     SCHISMA = "SCHISMA"
-    # Phase 5 aktiv (Schocks, Technologie, Wendepunkte):
-    PEST = "PEST"
+    # Phase 5 aktiv (Schocks, Technologie, Wendepunkte). Aenderung 7: von den drei
+    # gewuerfelten Schocks bleibt EINER — das Erdbeben, der einzige, der keine soziale
+    # Ursache haben KANN. Pest und Duerre sind fort: was sie taten (Bevoelkerung toeten,
+    # Vorraete vernichten), tut die Welt jetzt aus sich selbst — Hungersnot aus
+    # Uebervoelkerung, Mobilmachung und verlorenem Land.
     ERDBEBEN = "ERDBEBEN"
-    DUERRE = "DUERRE"
     INNOVATION = "INNOVATION"
     WENDEPUNKT = "WENDEPUNKT"
     # Aenderung 6 aktiv (Entladungen des Spannungszustands). Die dominante
@@ -140,9 +142,11 @@ class FactorLabel(StrEnum):
     FISKALDRUCK = "Fiskaldruck"
     AUSSENDRUCK = "Aussendruck"
     # Phase 5: Schocks, Technologie, Wendepunkte.
-    PEST = "Pest"
     ERDBEBEN = "Erdbeben"
-    DUERRE = "Duerre"
+    # Aenderung 7: die Ursache des Bebens. Auch der letzte exogene Schock wird nicht
+    # mehr gewuerfelt — er ist die Entladung einer Spannung, die sich ueber Jahrhunderte
+    # im Gestein aufbaut. Der Zufall sitzt in der Geologie (Worldgen), nicht im Jahr.
+    ERDSPANNUNG = "Erdspannung"
     FORSCHUNG = "Forschung"
     MACHTWECHSEL = "Machtwechsel"
     GLAUBENSWANDEL = "Glaubenswandel"
