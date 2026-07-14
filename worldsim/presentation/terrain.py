@@ -49,6 +49,8 @@ import numpy as np
 from opensimplex import OpenSimplex
 
 from worldsim.config import DEFAULT_MAP_CONFIG, MapConfig
+from worldsim.presentation.flow import accumulate, steepest_descent
+from worldsim.presentation.rain import moisture_and_rain
 from worldsim.rng import Rng, Stream
 
 __all__ = ["MAP_HEIGHT", "MAP_WIDTH", "Plate", "Terrain", "build_terrain"]
@@ -297,6 +299,62 @@ def _tectonic_relief(
     return base, relief, first
 
 
+def _erode(elevation: np.ndarray, sea_level: float, cfg: MapConfig) -> np.ndarray:
+    """EIN Durchgang Erosion: wo viel Wasser abfliesst, senkt es sein Bett.
+
+    Abgetragen wird nach ``sqrt(Abfluss)`` — ein Rinnsal kratzt, ein Strom graebt. Das
+    ist die ganze Regel, und sie genuegt, weil der Abfluss selbst schon alles weiss: er
+    ist gross in den Taelern (dort sammelt sich das Wasser vieler Zellen) und winzig auf
+    einem Kamm (dort faellt nur der eigene Regen). Also sinken die Taeler und die Kaemme
+    bleiben stehen — die Kette bekommt eine Struktur, statt eine glatte Wand zu sein, und
+    genau in die eingeschnittenen Rinnen legt sich hinterher der Fluss.
+
+    Zwei Dinge daran sind gemessen, nicht geraten:
+
+    * Der Regen ist der **echte Niederschlag** (:func:`rain.moisture_and_rain`), nicht
+      etwa gleichverteilt. Mit gleichverteiltem Regen sucht die Erosion das Wasser dort,
+      wo keines faellt: sie trug die Haenge um die Fluesse ab, und die Talquerschnitte an
+      den Flusszellen wurden FLACHER als ganz ohne Erosion (+0.001 statt +0.053). Mit dem
+      Regen, der die Fluesse auch fuellt, vertieft sie sie (+0.065). Wer das Tal schneidet,
+      muss das Wasser sein, das darin fliesst.
+    * Das **Gefaelle** steht NICHT in der Formel, obwohl die Lehrbuchform (``Stream
+      Power``, ~ ``sqrt(A) x S``) es fordert. Es kehrte die Wirkung ebenfalls um: ein
+      Talboden laeuft flach, ein Hang faellt steil — mit dem Gefaelle im Produkt trug die
+      Erosion die HAENGE ab und liess die Rinne stehen, und nebenbei kostete es ein
+      Fuenftel aller Gebirgsketten den Gipfel. Der Term gehoert in ein Modell mit
+      Zeitschritten, in dem der Hang nachrutscht; in EINEM Durchgang luegt er.
+
+    Ein Durchgang, keine Zeitachse (Ockham).
+    """
+    if cfg.erosion_strength <= 0.0:
+        return elevation
+
+    is_sea = elevation < sea_level
+    _, rainfall = moisture_and_rain(elevation, sea_level, cfg)
+    down, upstream_first = steepest_descent(elevation, is_sea)
+    flow = accumulate(down, upstream_first, np.where(is_sea, 0.0, rainfall))
+
+    peak_flow = float(flow.max()) or 1.0
+    carve = cfg.erosion_strength * np.sqrt(flow / peak_flow)
+    eroded = np.where(is_sea, elevation, elevation - carve).ravel()
+
+    # Ein Bach kann sich nicht unter das Bett graben, in das er muendet. Bergab
+    # durchlaufen (also gegen ``upstream_first``) sieht jede Zelle ihren Unterlauf schon
+    # fertig — ein Durchgang genuegt, um das Gefaelle zu retten. Ohne ihn risse die
+    # Erosion Loecher in ihr eigenes Flussbett (bergab waechst zwar der Abfluss, aber die
+    # Abtragung ist nicht exakt monoton), und die Hydrologie fuellte sie hinterher brav zu
+    # einer Kette winziger "Seen": kein Ergebnis, ein Artefakt.
+    #
+    # Die abflusslosen Senken (``down == -1``) bleiben davon unberuehrt — sie haben kein
+    # Bett, in das sie muenden. Sie sammeln den Abfluss ihres Beckens und sinken darum
+    # TIEFER: aus der Erosion faellt der See heraus, statt ihm zum Opfer zu fallen.
+    for index in upstream_first[::-1]:
+        target = int(down[index])
+        if target >= 0:
+            eroded[index] = max(eroded[index], eroded[target])
+    return eroded.reshape(elevation.shape)
+
+
 @lru_cache(maxsize=8)
 def build_terrain(
     seed: int,
@@ -330,6 +388,11 @@ def build_terrain(
     # UEBERLAGERN, nicht ersetzen: die Tektonik traegt die Struktur, das fBm die Rauheit.
     roughness = cfg.noise_strength * _fbm(noise, xs, ys, cfg.noise_octaves)
     elevation = crust + relief + roughness
+
+    # Erosion braucht schon eine Kueste, um zu wissen, wohin das Wasser laeuft; der
+    # endgueltige Meeresspiegel faellt aber erst DANACH (das Abgetragene verschoebe ihn
+    # sonst). Also zweimal dasselbe Quantil — beim zweiten Mal auf dem fertigen Relief.
+    elevation = _erode(elevation, float(np.quantile(elevation, 1.0 - cfg.land_fraction)), cfg)
 
     # Der Meeresspiegel faellt ZULETZT, als Quantil der fertigen Hoehen: so traegt jeder
     # Seed denselben Landanteil, statt mal Wasserwelt, mal Trockenplanet zu sein. Er

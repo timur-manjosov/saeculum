@@ -23,6 +23,7 @@ from worldsim.presentation.components import (
     zeitalter_regel,
 )
 from worldsim.presentation.explore import explore
+from worldsim.presentation.hydrology import Hydrology, build_hydrology
 from worldsim.presentation.palette import ROSE_PINE_MOON, Palette
 from worldsim.presentation.query import warum_entitaet, warum_event
 from worldsim.presentation.render import Steuerung, replay
@@ -49,6 +50,7 @@ __all__ = [
     "ROSE_PINE_MOON",
     "Biome",
     "Climate",
+    "Hydrology",
     "Palette",
     "Plate",
     "Steuerung",
@@ -59,6 +61,7 @@ __all__ = [
     "bevoelkerung_verlauf",
     "bilanz_tafel",
     "build_climate",
+    "build_hydrology",
     "build_terrain",
     "ereignis_text",
     "ereignisse_pro_jahr",

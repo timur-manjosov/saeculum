@@ -104,6 +104,12 @@ def test_high_peaks_are_cold_even_in_the_tropics() -> None:
 
     Gemessen am **hoechsten tropischen Gipfel** jeder Welt, die einen hat: er muss
     alpinen Fels oder Gletscher tragen, obwohl er auf der Breite des Regenwalds steht.
+
+    ``0.6`` ueber der typischen Landhoehe ist die Schwelle fuer "hoher Berg". Sie lag
+    frueher bei 0.8 — bis die Erosion kam und die Gipfel etwas abtrug (sie schneidet ja
+    gerade die nassen Luvhaenge an). Der Anspruch bleibt derselbe, nur der Massstab folgt
+    dem Relief: bei 0.6 qualifizieren sich 21 von 30 Welten, und **alle 21** tragen oben
+    Fels oder Eis.
     """
     tested = carried = 0
     for seed in SEEDS:
@@ -114,7 +120,7 @@ def test_high_peaks_are_cold_even_in_the_tropics() -> None:
             continue
         highest = np.where(tropical, altitude, -np.inf)
         cell = np.unravel_index(np.argmax(highest), highest.shape)
-        if highest[cell] < 0.8:
+        if highest[cell] < 0.6:
             continue  # diese Welt hat in den Tropen schlicht keinen hohen Berg
         tested += 1
         carried += climate.biome[cell] in (Biome.GLETSCHER, Biome.ALPIN)
