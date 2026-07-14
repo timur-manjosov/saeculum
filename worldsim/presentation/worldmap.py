@@ -1,79 +1,104 @@
-"""worldmap — die prozedurale Karte: opensimplex-Terrain + politische Territorien.
+"""worldmap — die Karte: Geologie, Klima und politische Territorien in einer Ansicht.
 
-Reine **Visualisierung ueber dem Adjazenzgraphen**. Die Regionen tragen seit dem
-Karten-Ausbau eine geografische Koordinate (aus worldgen, Determinismus-Vertrag);
-hier wird daraus eine Ansicht:
+Reine **Visualisierung ueber dem Adjazenzgraphen**. Die Regionen tragen eine
+geografische Koordinate (aus worldgen, Determinismus-Vertrag); hier wird daraus eine
+Ansicht in drei Lagen:
 
-1. ein statisches Terrain-Feld aus ``opensimplex``-Rauschen (Biome ueber Schwellen),
-   gedaempft gerendert, damit es zuruecktritt;
-2. die Regionen per Koordinate darauf verortet; jede Landzelle faellt an die
-   **naechstgelegene** Region (Voronoi ueber dem Graphen);
-3. gehoert diese Region einer Polity, faerbt sich die Zelle **kraeftig** in deren
-   Farbe. So werden Territorien als zusammenhaengende Flaechen sichtbar und ihre
-   Grenzen wandern, wenn Polities expandieren, annektieren oder zerfallen.
+1. **Wasser** kommt aus :mod:`worldsim.presentation.terrain` — Graben, Tiefsee, Schelf
+   sind geologische Tatsachen (siehe :func:`_water_style`);
+2. **Land** kommt aus :mod:`worldsim.presentation.climate` — jede Landzelle traegt das
+   Biom, das Temperatur und Feuchte aus ihr machen. Die Gebirgsketten bleiben lesbar,
+   weil hohe Kaemme alpinen Fels und Schnee tragen und die Biombaender an ihnen knicken;
+3. **Territorien**: jede Landzelle faellt an die naechstgelegene Region (Voronoi ueber
+   dem Graphen); gehoert die einer Polity, faerbt sich die Zelle **kraeftig** in deren
+   Farbe — die Glyphe bleibt das Biom, man sieht also weiterhin, WORAUF ein Reich sitzt.
 
-Farben aus der Rosé-Pine-Moon-Palette: Terrain in gedaempften Neutraltoenen, die
-Polity-Akzente treten als kraeftige Flaechen hervor. Read-only, kein Kern-RNG,
+Farben aus der Rosé-Pine-Moon-Palette: das Land in drei Familien (gruen = bewachsen,
+bernstein = trocken, grau/weiss = kalt), gedaempft gerendert, damit es zuruecktritt; die
+Polity-Akzente treten als kraeftige Flaechen hervor. Read-only, kein semantischer RNG,
 keine Simulationslogik, **keine** Tile-Mikrosimulation oder Geografie-Physik.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
-from opensimplex import OpenSimplex
 from rich.panel import Panel
 from rich.text import Text
 
 from worldsim.models import EntityId, World
+from worldsim.presentation.climate import Biome, build_climate
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
+from worldsim.presentation.terrain import MAP_HEIGHT, MAP_WIDTH
 
-__all__ = ["biome_grid", "render_map"]
+__all__ = ["render_map"]
 
-_MAP_W = 52  # Kartenbreite in Zeichen
-_MAP_H = 17  # Kartenhoehe in Zeilen
-_NOISE_SCALE = 3.4  # Feature-Groesse des Rauschens (kleiner ⇒ groessere Kontinente)
+# Biome als Schwellen ueber der Hoehe **relativ zum Meeresspiegel** ⇒
+# (Grenze, Glyphe, Ton, ist_Wasser). Der Ton laeuft als Helligkeitsrampe vom Abgrund
+# zum Gipfel. Wasser traegt nie Territorium — Ozeane trennen Land.
+# Die Biome lesen das **Relief** — die Hoehe ueber der eigenen Krustenbasis —, nicht die
+# Hoehe ueber dem Meeresspiegel. Der schwimmt naemlich mit dem Verhaeltnis kontinentaler
+# zu ozeanischer Flaeche: in einer Welt mit wenig Kontinent sinkt er fast auf den
+# Ozeanboden, und dann ragt der ganz gewoehnliche Kontinentalsockel weit ueber ihn — an
+# absoluten Schwellen gemessen waere ein solcher Kontinent restlos "Gebirge", ganz ohne
+# Hebung (gemessen: einzelne Seeds zu 95 % Bergland). Am Relief gemessen luegt nichts:
+# eine Ebene liegt auf ihrer Kruste (Median +0.02), ein Ozeanboden auch (-0.02) — nur
+# Orogenese und Subduktion schieben eine Zelle davon weg.
+#
+# Geeicht an der gemessenen Relief-Verteilung ueber 60 Seeds (Land p90 +0.47, p97 +0.95;
+# ausgewaschener Ozeanboden p10 -0.40, p2 -1.09).
+# Die beiden Landschwellen teilen sich die Arbeit genau wie die beiden Hoehenquellen:
+# Huegel liegen auf der Skala des fBm (die Detailrauheit reicht bis ~0.08) — deshalb
+# traegt JEDE Welt Huegel. Gebirge liegen auf der Skala der Tektonik, die das Rauschen um
+# ein Vielfaches ueberragt — deshalb traegt nur eine Welt mit Konvergenz Gebirge.
+_HILL_RELIEF = 0.08    # darueber: gewellt (Huegel) — das macht schon das Rauschen
+_PEAK_RELIEF = 0.35    # darueber: Gebirge — das macht nur die Tektonik
+_TRENCH_RELIEF = -0.55  # darunter: unter die eigene Kruste gerissen ⇒ Tiefseegraben
+_SHELF_DEPTH = 0.20    # so flach unter dem Meeresspiegel gilt Wasser als Kuestensaum
 
-# Biom-Schwellen ueber dem Rauschwert (-1..1) ⇒ (Glyphe, gedaempfter Terrain-Ton).
-# Die ersten ``_WATER_LEVELS`` sind Wasser (nie Territorium — Ozeane trennen Land).
-_BIOMES: tuple[tuple[float, str, str], ...] = (
-    (-0.28, "≈", P.pine),    # tiefe See
-    (-0.08, "~", P.foam),    # Kueste / flaches Wasser
-    (0.20, "·", P.muted),    # Ebene
-    (0.52, "^", P.subtle),   # Huegel
-    (1.01, "▲", P.text),     # Gebirge
-)
-_WATER_LEVELS = 2
+_DEEP_SEA = ("≈", P.pine)
+_SHELF = ("~", P.foam)
+_TRENCH = ("≋", P.highlight_high)
+
+# Die Landglyphen kommen jetzt aus dem KLIMA, nicht mehr aus der Hoehe: eine Zelle ist,
+# was Temperatur und Feuchte aus ihr machen. Die Ketten bleiben trotzdem lesbar — hohe
+# Kaemme tragen alpinen Fels und Schnee, und die Biombaender KNICKEN an ihnen (nasser
+# Luvwald, trockener Lee-Schatten), was mehr ueber sie sagt als eine Hoehenglyphe.
+#
+# Drei Farbfamilien tragen die Bedeutung, die Glyphe traegt das Detail:
+# gruen = bewachsen, bernstein = trocken, grau/weiss = kalt.
+_BIOME_STYLE: dict[Biome, tuple[str, str]] = {
+    Biome.GLETSCHER: ("*", P.text),
+    Biome.ALPIN: ("▲", P.subtle),
+    Biome.TUNDRA: ("-", P.muted),
+    Biome.TAIGA: ("^", P.pine),
+    Biome.GEMAESSIGTER_WALD: ("&", P.pine),
+    Biome.REGENWALD: ("#", P.pine),
+    Biome.FEUCHTGEBIET: ("=", P.foam),
+    Biome.GRASLAND: ('"', P.pine),
+    Biome.STEPPE: (",", P.gold),
+    Biome.SAVANNE: (";", P.gold),
+    Biome.WUESTE: ("░", P.gold),
+}
 
 # Polity-Farben (kraeftig) aus der Palette. Zuerst die terrain-fremden Akzente,
 # damit die groessten Polities klar unterscheidbar bleiben; dann der Rest.
 _POLITY_TONES: tuple[str, ...] = (P.love, P.gold, P.iris, P.rose, P.foam, P.pine, P.text)
 
 
-@lru_cache(maxsize=8)
-def biome_grid(seed: int, width: int = _MAP_W, height: int = _MAP_H) -> np.ndarray:
-    """Das statische Terrain-Rauschfeld ``(height, width)`` in ``-1..1``.
+def _water_style(depth: float, relief: float, oceanic: bool) -> tuple[str, str]:
+    """Wasser ⇒ (Glyphe, Ton). Das entscheidet weiter die Geologie, nicht das Klima.
 
-    Reine Funktion von ``(seed, width, height)`` — das Terrain gehoert zum Seed,
-    nicht zum jeweiligen Weltzustand. Gecacht (das Rauschen aendert sich nie) und
-    schreibgeschuetzt zurueckgegeben.
+    ``depth`` ist die Tiefe unter dem Meeresspiegel, ``relief`` die Hoehe ueber der
+    eigenen Krustenbasis. Jeder Zweig sagt eine geologische Tatsache: ein Graben ist unter
+    die eigene Kruste gerissener Meeresboden, ein Schelf ist ersoffener Kontinentalsockel.
     """
-    gen = OpenSimplex(seed)
-    field = np.empty((height, width), dtype=float)
-    for r in range(height):
-        for c in range(width):
-            field[r, c] = gen.noise2(c / width * _NOISE_SCALE, r / height * _NOISE_SCALE)
-    field.setflags(write=False)  # gecacht ⇒ nicht mutieren
-    return field
-
-
-def _biome_style(value: float) -> tuple[str, str, bool]:
-    """Ordne einem Rauschwert (Glyphe, Terrain-Ton, ``is_water``) zu."""
-    for level, (threshold, glyph, color) in enumerate(_BIOMES):
-        if value < threshold:
-            return glyph, color, level < _WATER_LEVELS
-    return _BIOMES[-1][1], _BIOMES[-1][2], False
+    if oceanic and relief <= _TRENCH_RELIEF:
+        return _TRENCH                 # die Subduktion hat den Meeresboden weggerissen
+    if not oceanic or depth > -_SHELF_DEPTH:
+        # Ersoffener Kontinentalsockel oder Kuestensaum. Auch ein gefluteter Grabenbruch
+        # faellt hierher — ein Rift auf Kontinentalkruste ist ein Binnenmeer, kein Abgrund.
+        return _SHELF
+    return _DEEP_SEA
 
 
 def _polity_tone(pid: EntityId, order: dict[EntityId, int]) -> str:
@@ -96,8 +121,8 @@ def render_map(
     seed: int = 0,
     owners: dict[EntityId, EntityId] | None = None,
     *,
-    width: int = _MAP_W,
-    height: int = _MAP_H,
+    width: int = MAP_WIDTH,
+    height: int = MAP_HEIGHT,
 ) -> Panel:
     """Rendere die Karte als ``rich``-Panel: Terrain plus politische Territorien.
 
@@ -112,7 +137,9 @@ def render_map(
         return Panel(Text("(no regions)", style=P.muted), title=f"world map · seed {seed}")
 
     coords = np.array([world.regions[rid].coord for rid in rids], dtype=float)
-    field = biome_grid(seed, width, height)
+    climate = build_climate(seed, width, height)  # einmal je Welt (gecacht), nie pro Tick
+    terrain = climate.terrain
+    relief, oceanic = terrain.relief, terrain.oceanic
     nearest = _nearest_region(coords, width, height)
     owner_of = (
         owners
@@ -136,16 +163,27 @@ def render_map(
         for col in range(width):
             pid = cap_cell.get((row, col))
             if pid is not None:
-                letter = (world.polities[pid].name[:1] or "?")
+                letter = world.polities[pid].name[:1] or "?"
                 text.append(letter, style=f"bold {_polity_tone(pid, order)}")
                 continue
-            glyph, terrain, is_water = _biome_style(float(field[row, col]))
-            if not is_water:
-                owner = owner_of.get(rids[int(nearest[row, col])])
-                if owner is not None:
-                    text.append(glyph, style=f"bold {_polity_tone(owner, order)}")
-                    continue
-            text.append(glyph, style=f"dim {terrain}")
+            biome = climate.biome[row, col]
+            if biome is None:  # Wasser: das entscheidet die Geologie, nicht das Klima
+                glyph, tone = _water_style(
+                    float(terrain.elevation[row, col]) - terrain.sea_level,
+                    float(relief[row, col]),
+                    bool(oceanic[row, col]),
+                )
+                text.append(glyph, style=f"dim {tone}")
+                continue
+
+            glyph, tone = _BIOME_STYLE[biome]
+            owner = owner_of.get(rids[int(nearest[row, col])])
+            if owner is not None:
+                # Die Polity faerbt die Flaeche, die Glyphe bleibt das Biom: man sieht
+                # weiterhin, WORAUF ein Reich sitzt (Steppe, Regenwald, Wueste).
+                text.append(glyph, style=f"bold {_polity_tone(owner, order)}")
+            else:
+                text.append(glyph, style=f"dim {tone}")
         if row != height - 1:
             text.append("\n")
     return Panel(text, title=f"world map · seed {seed}", title_align="left", border_style=P.muted)

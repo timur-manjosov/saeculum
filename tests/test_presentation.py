@@ -23,7 +23,7 @@ from worldsim.presentation import (
     ViewState,
     VisualKind,
     bevoelkerung_verlauf,
-    biome_grid,
+    build_terrain,
     ereignisse_pro_jahr,
     event_to_visual,
     macht_verlauf,
@@ -219,13 +219,13 @@ def test_stats_series_are_derivable_and_nonempty() -> None:
 
 # --- Aufgabe 5: prozedurale Karte (deterministisch) ---------------------------
 
-def test_biome_grid_is_deterministic() -> None:
-    """Das Terrain-Feld ist eine reine, reproduzierbare Funktion des Seeds (2D-Gitter)."""
-    a = biome_grid(42)
+def test_terrain_is_deterministic() -> None:
+    """Das Hoehenfeld ist eine reine, reproduzierbare Funktion des Seeds (2D-Gitter)."""
+    a = build_terrain(42).elevation
     assert a.ndim == 2 and a.shape[0] >= 1 and a.shape[1] >= 1
-    assert a.tolist() == biome_grid(42).tolist()  # deterministisch (gecacht)
-    # Anderer Seed ⇒ anderes Terrain.
-    assert a.tolist() != biome_grid(99).tolist()
+    assert a.tolist() == build_terrain(42).elevation.tolist()  # deterministisch (gecacht)
+    # Anderer Seed ⇒ andere Welt.
+    assert a.tolist() != build_terrain(99).elevation.tolist()
 
 
 def test_render_map_runs_headless() -> None:

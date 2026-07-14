@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["DEFAULT_CONFIG", "Config"]
+__all__ = ["DEFAULT_CONFIG", "DEFAULT_MAP_CONFIG", "Config", "MapConfig"]
 
 
 @dataclass(frozen=True)
@@ -576,3 +576,81 @@ class Config:
 # Ein einziger, geteilter Default. Driver verwendet ihn, wenn nichts uebergeben
 # wird.
 DEFAULT_CONFIG = Config()
+
+
+@dataclass(frozen=True)
+class MapConfig:
+    """Stellschrauben der Karten-Geologie (Praesentation).
+
+    **Bewusst getrennt von** :class:`Config`: die Karte ist eine Ansicht, kein Teil
+    der Simulation. Sie aendert nie, WELCHE Fakten entstehen, gehoert also nicht in
+    die Lauf-Identitaet ``(seed, years, config_version)`` — wer hier dreht, bekommt
+    eine andere Karte, aber dieselbe Geschichte.
+    """
+
+    # --- Tektonik: die grosse Struktur -------------------------------------
+    # Handvoll Platten (Voronoi-Zellen um gestreute Keimpunkte). Keine echte
+    # Plattensimulation, keine Drift ueber Zeit: EIN Standbild von Bewegungs-
+    # richtungen, aus dem die Hoehenstruktur folgt.
+    plate_count: int = 7
+    # Anteil ozeanischer Platten. Sie sind dichter und tauchen daher unter
+    # kontinentale ab — daraus entstehen Subduktion, Tiefseegraben, Inselbogen.
+    # Mindestens eine Platte je Art ist garantiert (sonst gibt es keine Subduktion).
+    oceanic_plate_fraction: float = 0.55
+    # Amplitude der tektonischen Hoehenformung (Kollision, Kordillere, Graben, Rift).
+    # Der eine Regler fuer "wie dramatisch ist diese Welt". Deutlich groesser als
+    # ``noise_strength`` — und das ist der Punkt: die Tektonik traegt die Struktur, das
+    # Rauschen nur die Rauheit. Umgekehrt (gemessen) ertrinken die Ketten im Rauschen.
+    mountain_strength: float = 1.10
+    # Breite des tektonisch geformten Saums beidseits einer Plattengrenze (in
+    # Einheiten des Einheitsquadrats). Bestimmt, wie breit eine Gebirgskette wird.
+    boundary_width: float = 0.13
+
+    # --- Rauschen: die Detailrauheit ---------------------------------------
+    # fBm ueber der Tektonik: mehrere Oktaven, jede halb so stark und doppelt so
+    # fein. UEBERLAGERT die Tektonik, ersetzt sie nicht.
+    noise_octaves: int = 5
+    noise_strength: float = 0.22
+
+    # --- Meeresspiegel ------------------------------------------------------
+    # Als Ziel-Landanteil ausgedrueckt: die Schwelle wird je Welt als Quantil der
+    # Hoehenverteilung gezogen. Ein fester Hoehenwert waere seed-abhaengig mal eine
+    # Wasserwelt, mal ein Trockenplanet; so traegt jeder Seed grob dieselbe Kueste.
+    land_fraction: float = 0.30
+
+    # --- Klima: Temperatur --------------------------------------------------
+    # Abnahme je Hoeheneinheit ueber der TYPISCHEN LANDHOEHE dieser Welt (nicht ueber dem
+    # Meeresspiegel — der schwimmt, siehe ``climate._land_reference``). Sie traegt eine
+    # Doppellast: gross genug, dass hohe Gipfel auch am AEQUATOR unter die Schneegrenze
+    # fallen (deshalb braucht es keine eigene "Schnee-Hoehenzone" — der Gradient erzeugt
+    # sie, breitenunabhaengig), aber nicht so gross, dass jede Kette vereist. Gemessen:
+    # bei 0.70 trug kein einziger Tropengipfel Schnee, bei 1.15 frass das Eis den Fels.
+    altitude_lapse: float = 1.00
+    temp_noise: float = 0.05
+
+    # --- Klima: Feuchtigkeit ------------------------------------------------
+    # Reichweite (in Zellen), ueber die eine Luftmasse landeinwaerts austrocknet —
+    # die Kontinentalitaet.
+    moisture_range: float = 18.0
+    # Regenschatten-Staerke: welcher Anteil der Restfeuchte je Zelle voller Steigung
+    # abregnet. Hoch ⇒ scharfer Schatten hinter dem Kamm. (Bei 0.75 blieb hinter dem
+    # ersten Kamm nichts mehr uebrig und der ganze Kontinent wurde Wueste.)
+    rain_shadow_strength: float = 0.55
+    # Steigung (Hoehe je Zelle), ab der eine Luftmasse voll orografisch abregnet.
+    orographic_scale: float = 0.28
+    # Rossbreiten (~27°): absinkende Luft ⇒ Trockenheit. Das ist der zweite Grund,
+    # warum eine Wueste dort liegt, wo sie liegt (der erste ist der Regenschatten).
+    horse_latitude_dryness: float = 0.55
+
+    # --- Klimabaender: Schwellen (Temperatur und Feuchte je 0..1) -----------
+    snow_temp: float = 0.08       # darunter: Gletscher/Eis (Pole UND hohe Gipfel)
+    alpine_temp: float = 0.38     # darunter und hoch gelegen: alpiner Fels
+    boreal_temp: float = 0.40     # darunter: Tundra/Taiga
+    temperate_temp: float = 0.64  # darunter: gemaessigt; darueber: tropisch
+    alpine_altitude: float = 0.45  # ab dieser Hoehe ueber dem Meer gilt "hochgelegen"
+    arid_moisture: float = 0.22   # darunter: Wueste
+    dry_moisture: float = 0.40    # darunter: Steppe (bzw. Tundra statt Taiga)
+    humid_moisture: float = 0.55  # darueber: geschlossener Wald / Regenwald
+
+
+DEFAULT_MAP_CONFIG = MapConfig()
