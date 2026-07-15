@@ -16,23 +16,32 @@ Ansicht in drei Lagen:
    dem Graphen); gehoert die einer Polity, faerbt sich die Zelle **kraeftig** in deren
    Farbe — die Glyphe bleibt das Biom, man sieht also weiterhin, WORAUF ein Reich sitzt.
 
-Farben aus der Rosé-Pine-Moon-Palette: das Land in drei Familien (gruen = bewachsen,
-bernstein = trocken, grau/weiss = kalt), gedaempft gerendert, damit es zuruecktritt; die
-Polity-Akzente treten als kraeftige Flaechen hervor. Read-only, kein semantischer RNG,
-keine Simulationslogik, **keine** Tile-Mikrosimulation oder Geografie-Physik.
+Die Farben liegen in **zwei** Paletten, und das ist Absicht: die Natur traegt echte
+Erdtoene (:class:`~worldsim.presentation.palette.TerrainPalette` — Ozean in Tiefenstufen,
+Sand, gestaffelte Gruentoene, Fels und Schnee), waehrend die Rosé-Pine-Akzente der
+*Bedeutung* vorbehalten bleiben (Polity-Flaechen, Ereignisse, Chrome). So kann das Land
+natuerlich aussehen, ohne dass ein Reich in der Landschaft untergeht: die Natur ist
+gedaempft und **hoehenschattiert** (:func:`_hillshade` — eine Lichtquelle aus Nordwesten
+laesst Gebirge plastisch werden), die Politik liegt flach und kraeftig darueber.
+
+Read-only, kein semantischer RNG, keine Simulationslogik, **keine** Tile-Mikrosimulation
+oder Geografie-Physik — nur eine Ansicht ueber dem fertigen Hoehenfeld.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 from rich.panel import Panel
 from rich.text import Text
 
-from worldsim.config import DEFAULT_MAP_CONFIG
+from worldsim.config import DEFAULT_MAP_CONFIG, MapConfig
 from worldsim.models import EntityId, World
-from worldsim.presentation.climate import Biome
+from worldsim.presentation.climate import Biome, latitudes
 from worldsim.presentation.flow import NEIGHBOURS
 from worldsim.presentation.hydrology import STREAM_FACTOR, Hydrology, build_hydrology
+from worldsim.presentation.palette import NATURAL_EARTH as N
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.terrain import MAP_HEIGHT, MAP_WIDTH
 
@@ -61,21 +70,26 @@ _PEAK_RELIEF = 0.35    # darueber: Gebirge — das macht nur die Tektonik
 _TRENCH_RELIEF = -0.55  # darunter: unter die eigene Kruste gerissen ⇒ Tiefseegraben
 _SHELF_DEPTH = 0.20    # so flach unter dem Meeresspiegel gilt Wasser als Kuestensaum
 
-# Das Meer in vier Stufen — die Glyphe wird dichter und der Ton dunkler, je tiefer es
-# wird. Das ist die raeumliche Tiefe der Karte: der helle Saum zeichnet JEDE Kueste nach,
-# dahinter faellt der Schelf ab, dann die Tiefsee, und im Graben ist es fast schwarz.
-_COAST = ("~", P.foam)                 # Wasser mit Landnachbar: die Kuestenlinie, hell
-_SHELF = ("≈", P.foam)                 # flaches Wasser ueber ersoffenem Sockel
-_DEEP_SEA = ("≈", P.pine)              # Tiefsee — dieselbe Glyphe, dunkler Ton
-_TRENCH = ("≋", P.highlight_high)      # der Abgrund
+# Zeichenzellen sind etwa doppelt so hoch wie breit (dasselbe ``_CHAR_RATIO`` wie in
+# :mod:`terrain`). Die Hoehenschattierung braucht das, damit ein Nord-Sued-Hang nicht
+# doppelt so steil erscheint wie ein gleich hoher Ost-West-Hang.
+_CHAR_RATIO = 2.0
 
-# Das Suesswasser tritt HELL heraus — es ist der Faden, an dem man die Welt liest.
-# Der See traegt die Wasser-Glyphe des Meeres, nur hell: eine Flaeche aus ``≈`` mitten im
-# Land liest sich als Wasserkoerper — vom winzigen Bergsee bis zum Binnenmeer eines
-# ertrunkenen Grabenbruchs. (Ein eigenes Seezeichen wie ``○`` liess grosse Seen wie ein
-# Feld aus Blasen aussehen.)
-_LAKE = ("≈", P.foam)
-_MOUTH = ("Δ", P.foam)  # dort, wo ein grosser Strom das Meer erreicht
+# Das Meer in vier Tiefenstufen — dunkles Blau in der Tiefe, hell am Saum. Das ist die
+# raeumliche Tiefe der Karte: der helle Kuestensaum zeichnet JEDE Kueste nach, dahinter
+# faellt der Schelf ab, dann die offene Tiefsee, und im Graben ist es fast schwarzblau.
+# Die Glyphe wird dichter mit der Tiefe, der Ton (aus der Erdpalette) dunkler.
+_COAST = ("~", N.coast)      # Wasser mit Landnachbar: die Kuestenlinie, hell
+_SHELF = ("≈", N.shelf)      # flaches Wasser ueber ersoffenem Sockel
+_DEEP_SEA = ("≈", N.deep_sea)  # offene Tiefsee — dieselbe Glyphe, dunkler Ton
+_TRENCH = ("≋", N.abyss)     # der Abgrund
+
+# Das Suesswasser tritt HELL und in einem KUEHLEREN Blau als das Meer heraus — es ist der
+# Faden, an dem man die Welt liest, und liegt flach (unbeschattet), damit es nicht im
+# Relief untergeht. Der See traegt die Wasser-Glyphe des Meeres: eine Flaeche aus ``≈``
+# mitten im Land liest sich als Wasserkoerper — vom Bergsee bis zum ertrunkenen Graben.
+_LAKE = ("≈", N.lake)
+_MOUTH = ("Δ", N.stream)  # dort, wo ein grosser Strom das Meer erreicht
 # Die Flussglyphe folgt der Abflussrichtung: eine Linie, die man verfolgen kann. Der
 # Strom (viel Akkumulation) bekommt die schwere Variante — die Breite eines Flusses ist
 # nichts anderes als sein Durchfluss.
@@ -86,25 +100,27 @@ _RIVER_GLYPHS: dict[tuple[int, int], tuple[str, str]] = {
     (-1, 1): ("╱", "╱"), (1, -1): ("╱", "╱"),  # noqa: RUF001 — Kastengrafik, kein Schrägstrich
 }
 
-# Die Landglyphen kommen jetzt aus dem KLIMA, nicht mehr aus der Hoehe: eine Zelle ist,
-# was Temperatur und Feuchte aus ihr machen. Die Ketten bleiben trotzdem lesbar — hohe
-# Kaemme tragen alpinen Fels und Schnee, und die Biombaender KNICKEN an ihnen (nasser
-# Luvwald, trockener Lee-Schatten), was mehr ueber sie sagt als eine Hoehenglyphe.
+# Die Landglyphe kommt aus dem KLIMA (Biom), der Ton aus der Erdpalette. Die Glyphe traegt
+# das Detail — welches Biom —, die Hoehe liest man an zweierlei: die hohen Kaemme tragen
+# eigene Glyphen (``▲`` Fels, ``*`` Schnee) UND das ganze Land ist hoehenschattiert
+# (:func:`_hillshade`), sodass Huegel und Gebirge plastisch aus der Ebene treten. Die
+# Glyphen steigen grob in der Dichte mit der Hoehe an — von der leeren Ebene (``"`` ``,``)
+# ueber Wald (``&`` ``#``) und Wueste (``░``) bis zum Gipfelzeichen (``▲``).
 #
-# Drei Farbfamilien tragen die Bedeutung, die Glyphe traegt das Detail:
-# gruen = bewachsen, bernstein = trocken, grau/weiss = kalt.
+# Die Toene sind jetzt Erdfarben statt Rosé-Pine: Gruen gestaffelt fuer Vegetation,
+# Sand/Bernstein fuer Trockenland, Grau/Weiss fuer Fels und Schnee.
 _BIOME_STYLE: dict[Biome, tuple[str, str]] = {
-    Biome.GLETSCHER: ("*", P.text),
-    Biome.ALPIN: ("▲", P.subtle),
-    Biome.TUNDRA: ("-", P.muted),
-    Biome.TAIGA: ("^", P.pine),
-    Biome.GEMAESSIGTER_WALD: ("&", P.pine),
-    Biome.REGENWALD: ("#", P.pine),
-    Biome.FEUCHTGEBIET: ("=", P.foam),
-    Biome.GRASLAND: ('"', P.pine),
-    Biome.STEPPE: (",", P.gold),
-    Biome.SAVANNE: (";", P.gold),
-    Biome.WUESTE: ("░", P.gold),
+    Biome.GLETSCHER: ("*", N.snow),
+    Biome.ALPIN: ("▲", N.alpine),
+    Biome.TUNDRA: ("-", N.tundra),
+    Biome.TAIGA: ("^", N.taiga),
+    Biome.GEMAESSIGTER_WALD: ("&", N.forest),
+    Biome.REGENWALD: ("#", N.rainforest),
+    Biome.FEUCHTGEBIET: ("=", N.wetland),
+    Biome.GRASLAND: ('"', N.grassland),
+    Biome.STEPPE: (",", N.steppe),
+    Biome.SAVANNE: (";", N.savanna),
+    Biome.WUESTE: ("░", N.desert),
 }
 
 # Polity-Farben (kraeftig) aus der Palette. Zuerst die terrain-fremden Akzente,
@@ -140,7 +156,51 @@ def _river_style(water: Hydrology, row: int, col: int, threshold: float) -> tupl
     step = water.flows_to(row, col) or (0, 1)
     light, heavy = _RIVER_GLYPHS[step]
     is_stream = float(water.flow[row, col]) >= STREAM_FACTOR * threshold
-    return (heavy, P.foam) if is_stream else (light, P.pine)
+    return (heavy, N.stream) if is_stream else (light, N.river)
+
+
+def _hillshade(elevation: np.ndarray, cfg: MapConfig) -> np.ndarray:
+    """Beleuchte das Relief aus Nordwesten ⇒ ein Helligkeits-Faktor (~0.4..1.75) je Zelle.
+
+    Kein 3D-Rendering, nur die eine billige Rechnung, die einer flachen Karte sofort
+    Plastik gibt: der Neigungsvektor jeder Zelle wird gegen einen schraeg von oben-links
+    einfallenden Lichtstrahl gehalten. Zum Licht geneigte Haenge kommen ueber 1.0 (heller),
+    abgewandte darunter (dunkler); die Ebene bleibt bei 1.0. Der Faktor skaliert am Ende
+    nur die Helligkeit des ohnehin gewaehlten Erd-/Wassertons — er aendert weder Glyphe
+    noch Farbton, also bleibt Biom und Tiefe lesbar.
+
+    Zwei Feinheiten: die Zeilen-Steigung wird durch ``_CHAR_RATIO`` geteilt (die Zelle ist
+    doppelt so hoch wie breit, ein Nord-Sued-Hang also scheinbar steiler), und das Gefaelle
+    wird vorher ueberhoeht (``hillshade_exaggeration``), weil die Hoehenunterschiede je
+    Zelle sonst zu klein fuer sichtbare Schatten sind.
+    """
+    az = math.radians(cfg.hillshade_azimuth)
+    alt = math.radians(cfg.hillshade_altitude)
+    grad_row, grad_col = np.gradient(elevation.astype(float))
+    grad_col = grad_col * cfg.hillshade_exaggeration
+    grad_row = grad_row * cfg.hillshade_exaggeration / _CHAR_RATIO
+
+    # Lichtvektor: Azimut auf den Bildschirm gelegt (Nord = oben = -Zeile, Ost = +Spalte),
+    # Hoehe ueber dem Horizont als z. Die Flaechennormale ist (-d/dSpalte, -d/dZeile, 1).
+    light_col = math.cos(alt) * math.sin(az)
+    light_row = -math.cos(alt) * math.cos(az)
+    light_up = math.sin(alt)
+    normal_len = np.sqrt(grad_col * grad_col + grad_row * grad_row + 1.0)
+    illum = (-grad_col * light_col - grad_row * light_row + light_up) / normal_len
+
+    # Die flache Flaeche beleuchtet der Strahl mit ``sin(alt)``; das ist der Nullpunkt, um
+    # den herum der Kontrast die Helligkeit auf- und abschwingen laesst.
+    flat = math.sin(alt)
+    factor = 1.0 + cfg.hillshade_contrast * (illum - flat) / flat
+    return np.clip(factor, 0.4, 1.75)
+
+
+def _shade(color: str, factor: float) -> str:
+    """Skaliere die Helligkeit eines ``#rrggbb``-Tons mit dem Hillshade-Faktor."""
+    red = min(255, max(0, round(int(color[1:3], 16) * factor)))
+    green = min(255, max(0, round(int(color[3:5], 16) * factor)))
+    blue = min(255, max(0, round(int(color[5:7], 16) * factor)))
+    return f"#{red:02x}{green:02x}{blue:02x}"
 
 
 def _coastline(is_sea: np.ndarray) -> np.ndarray:
@@ -152,6 +212,26 @@ def _coastline(is_sea: np.ndarray) -> np.ndarray:
     for drow, dcol in NEIGHBOURS:
         touches |= land[1 + drow : 1 + drow + height, 1 + dcol : 1 + dcol + width]
     return is_sea & touches
+
+
+# Breitengrad-Marken am linken Rand: sie sagen dem Auge, dass dies ein PLANET ist und
+# keine Ebene — die Karte spannt Pol zu Pol, mit Aequator, Rossbreiten und Polarfront an
+# ihren festen Breiten. Es ist die billige Andeutung einer Projektion (Aufgabe 5), ohne
+# eine echte Projektion zu rechnen oder Kartendaten zu verdecken.
+_LAT_TICKS: tuple[tuple[float, str], ...] = (
+    (60.0, "60N"), (30.0, "30N"), (0.0, "EQ"), (-30.0, "30S"), (-60.0, "60S")
+)
+_AXIS_WIDTH = 4  # 3 Zeichen Marke + 1 Trennspalte
+
+
+def _latitude_axis(height: int) -> list[str]:
+    """Fuer jede Zeile die Beschriftung der linken Breitengrad-Skala (je ``_AXIS_WIDTH``)."""
+    lat = latitudes(height)
+    axis = [" " * _AXIS_WIDTH] * height
+    for degrees, label in _LAT_TICKS:
+        row = int(np.argmin(np.abs(lat - degrees)))
+        axis[row] = f"{label:>3s} "  # rechtsbuendig, dann die Trennspalte
+    return axis
 
 
 def _polity_tone(pid: EntityId, order: dict[EntityId, int]) -> str:
@@ -193,9 +273,16 @@ def render_map(
     water = build_hydrology(seed, width, height)  # einmal je Welt (gecacht), nie pro Tick
     climate, terrain = water.climate, water.terrain
     relief, oceanic = terrain.relief, terrain.oceanic
-    is_sea = np.asarray(terrain.elevation) < terrain.sea_level
+    elevation = np.asarray(terrain.elevation)
+    is_sea = elevation < terrain.sea_level
     coastal = _coastline(is_sea)
-    threshold = DEFAULT_MAP_CONFIG.river_threshold
+    cfg = DEFAULT_MAP_CONFIG
+    threshold = cfg.river_threshold
+
+    # Hoehenschattierung: einmal je Render aus dem Hoehenfeld gerechnet (reine Numerik,
+    # kein Zufall). Unter Wasser nur gedaempft — die glatte See soll nicht flimmern.
+    shade = _hillshade(elevation, cfg)
+    water_shade = 1.0 + (shade - 1.0) * cfg.hillshade_water
     nearest = _nearest_region(coords, width, height)
     owner_of = (
         owners
@@ -214,8 +301,11 @@ def render_map(
             row = min(height - 1, int(cy * height))
             cap_cell[(row, col)] = pid
 
+    axis = _latitude_axis(height)  # linke Breitengrad-Skala (Aufgabe 5: es ist ein Planet)
+
     text = Text()
     for row in range(height):
+        text.append(axis[row], style=P.muted)
         for col in range(width):
             pid = cap_cell.get((row, col))
             if pid is not None:
@@ -225,19 +315,21 @@ def render_map(
             if is_sea[row, col]:  # Wasser: das entscheidet die Geologie, nicht das Klima
                 if water.mouth[row, col]:
                     glyph, tone = _MOUTH  # hier erreicht ein Strom das Meer
-                    text.append(glyph, style=tone)
+                    text.append(glyph, style=_shade(tone, float(water_shade[row, col])))
                     continue
                 glyph, tone = _water_style(
-                    float(terrain.elevation[row, col]) - terrain.sea_level,
+                    float(elevation[row, col]) - terrain.sea_level,
                     float(relief[row, col]),
                     bool(oceanic[row, col]),
                     bool(coastal[row, col]),
                 )
-                text.append(glyph, style=tone if coastal[row, col] else f"dim {tone}")
+                text.append(glyph, style=_shade(tone, float(water_shade[row, col])))
                 continue
 
             # Suesswasser liegt UEBER dem Biom und ueber dem Territorium: ein Fluss ist
             # kein Untergrund, auf dem man siedelt, sondern die Linie, an der man siedelt.
+            # Es liegt FLACH (unbeschattet): der helle Wasserfaden soll das Relief queren,
+            # nicht in seinem Schatten verschwinden.
             if water.lake[row, col]:
                 glyph, tone = _LAKE
                 text.append(glyph, style=tone)
@@ -250,11 +342,15 @@ def render_map(
             glyph, tone = _BIOME_STYLE[climate.biome[row, col]]
             owner = owner_of.get(rids[int(nearest[row, col])])
             if owner is not None:
-                # Die Polity faerbt die Flaeche, die Glyphe bleibt das Biom: man sieht
-                # weiterhin, WORAUF ein Reich sitzt (Steppe, Regenwald, Wueste).
+                # Die Polity faerbt die Flaeche FLACH und kraeftig (unbeschattet), die
+                # Glyphe bleibt das Biom: man sieht weiterhin, WORAUF ein Reich sitzt
+                # (Steppe, Regenwald, Wueste), und die Politik hebt sich klar von der
+                # gedaempft-schattierten Natur ab.
                 text.append(glyph, style=f"bold {_polity_tone(owner, order)}")
             else:
-                text.append(glyph, style=f"dim {tone}")
+                # Natur: der Erdton, hoehenschattiert ⇒ Huegel und Gebirge treten plastisch
+                # aus der Ebene, ohne dass die Glyphe (das Biom) sich aendert.
+                text.append(glyph, style=_shade(tone, float(shade[row, col])))
         if row != height - 1:
             text.append("\n")
     return Panel(text, title=f"world map · seed {seed}", title_align="left", border_style=P.muted)

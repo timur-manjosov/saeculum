@@ -677,5 +677,23 @@ class MapConfig:
     # 9 % der Landzellen einen Fluss — ein Netz, kein Sumpf.
     river_threshold: float = 0.40
 
+    # --- Darstellung: Hoehenschattierung (Hillshading) ----------------------
+    # Eine simulierte Lichtquelle beleuchtet das Relief: dem Licht zugewandte Haenge
+    # werden heller, abgewandte dunkler gerendert. Das macht Gebirge plastisch, ohne die
+    # Glyphen oder die Geologie anzufassen — reine Darstellung ueber demselben Hoehenfeld.
+    # Der Standard-Einfall kommt aus NORDWESTEN (Azimut 315°); das ist die kartografische
+    # Konvention, weil das Auge eine von oben-links beleuchtete Flaeche als erhaben liest
+    # (von unten beleuchtet kippt sie zu einer Delle — der "Krater-Illusion").
+    hillshade_azimuth: float = 315.0    # Lichtrichtung in Grad (315 = Nordwest)
+    hillshade_altitude: float = 45.0    # Hoehe der Lichtquelle ueber dem Horizont, Grad
+    # Ueberhoehung des Gefaelles VOR der Beleuchtung: die Hoehenunterschiede je Zelle sind
+    # klein (~0.05..0.3), also wird die Steigung gestreckt, sonst bliebe die Schattierung
+    # unsichtbar. Der Kontrast steuert, wie weit die Helligkeit um 1.0 schwingt.
+    hillshade_exaggeration: float = 7.0
+    hillshade_contrast: float = 0.65
+    # Unter Wasser nur ein Hauch davon (Bathymetrie liest sich schon aus den Tiefenstufen);
+    # sonst flimmerte die glatte See.
+    hillshade_water: float = 0.35
+
 
 DEFAULT_MAP_CONFIG = MapConfig()

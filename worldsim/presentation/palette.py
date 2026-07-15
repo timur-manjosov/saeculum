@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["ROSE_PINE_MOON", "Palette"]
+__all__ = ["NATURAL_EARTH", "ROSE_PINE_MOON", "Palette", "TerrainPalette"]
 
 
 @dataclass(frozen=True)
@@ -63,4 +63,68 @@ ROSE_PINE_MOON = Palette(
     highlight_low="#2a283e",
     highlight_med="#44415a",
     highlight_high="#56526e",
+)
+
+
+@dataclass(frozen=True)
+class TerrainPalette:
+    """Die **natuerlichen** Toene der Karte — Erde, Wasser, Vegetation.
+
+    Bewusst getrennt von :class:`Palette`: das Rosé-Pine-Schema traegt die *Bedeutung*
+    (Chrome, Rahmen, Ereignisarten, Polity-Akzente), diese Toene tragen die *Welt*. So
+    kann das Land in echten Erdfarben liegen, ohne dass die sechs Akzente ihre semantische
+    Rolle verlieren — ein Reich hebt sich weiterhin **kraeftig** von der gedaempften Natur
+    ab. Auch hier: **ein** Ort, ``#rrggbb``-Strings, direkt als ``rich``-Stil nutzbar.
+
+    Die Toene sind so gewaehlt, dass sie auf dem dunklen Rosé-Pine-Grund lesbar liegen und
+    unter der Hoehenschattierung (:func:`worldmap._hillshade`) sowohl abdunkeln als auch
+    aufhellen koennen, ohne zu kippen.
+    """
+
+    # Ozean in Tiefenstufen (dunkel = tief): das gibt der Karte raeumliche Tiefe.
+    abyss: str      # Tiefseegraben — fast schwarzblau
+    deep_sea: str   # offene Tiefsee
+    shelf: str      # ersoffener Kontinentalsockel / flaches Randmeer
+    coast: str      # der helle Kuestensaum
+    # Suesswasser (heller, kuehler als das Meer ⇒ es liest sich als anderes Wasser).
+    river: str
+    stream: str     # der grosse Strom — heller/breiter
+    lake: str
+    # Vegetation, nach Feuchte/Waerme gestaffelt (dunkelgruen = ueppig).
+    rainforest: str
+    forest: str     # geschlossener gemaessigter Wald
+    taiga: str      # kuehler Nadelwald
+    grassland: str
+    wetland: str
+    # Trockenland (Sand- und Bernsteintoene).
+    savanna: str
+    steppe: str
+    desert: str
+    # Kalt und Fels (Grau bis Schnee-Weiss).
+    tundra: str
+    alpine: str     # nackter Hochgebirgsfels
+    snow: str       # Gletscher/Schnee
+
+
+# Erdtoene, abgestimmt auf den Rosé-Pine-Grund: gedaempft genug, dass die Polity-Akzente
+# hervortreten, gesaettigt genug, dass Ozean, Wueste und Wald klar auseinanderfallen.
+NATURAL_EARTH = TerrainPalette(
+    abyss="#141d33",
+    deep_sea="#1e3a63",
+    shelf="#2f6488",
+    coast="#6aa9c6",
+    river="#5aa6d0",
+    stream="#93d1e8",
+    lake="#3d7ba8",
+    rainforest="#2f6b39",
+    forest="#4c8a48",
+    taiga="#3d7d64",
+    grassland="#8aad52",
+    wetland="#4f9c86",
+    savanna="#b39a51",
+    steppe="#c3ac66",
+    desert="#dac384",
+    tundra="#8f9a88",
+    alpine="#9b96a1",
+    snow="#e7edf2",
 )
