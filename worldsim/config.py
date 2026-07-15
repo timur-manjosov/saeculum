@@ -695,5 +695,19 @@ class MapConfig:
     # sonst flimmerte die glatte See.
     hillshade_water: float = 0.35
 
+    # --- Darstellung: Politik ueber gedaempfter Natur (Schritt 5) ------------
+    # Das Kernprinzip der politischen Karte: unbeanspruchtes Land wird ENTSAETTIGT und
+    # gedaempft (es ist Landschaft, kein Anspruch), damit die kraeftigen Polity-Toene
+    # darueber leuchten. Der Helligkeits-/Saettigungskontrast ist wichtiger als die
+    # Farbwahl selbst — deshalb sind es zwei getrennte Regler. Bewusst nur ein Notch: bei
+    # zu starker Daempfung wird eine politik-arme Fruehzeit-Karte zu grauem Brei (die
+    # Erdfarben aus Schritt 4 sollen erhalten bleiben, nur zuruecktreten).
+    nature_desaturation: float = 0.42  # Anteil, um den unbeanspruchtes Land vergraut
+    nature_dim: float = 0.82           # zusaetzliche Daempfung seiner Helligkeit
+    # Beanspruchtes Land traegt die Polity-Farbe, aber das Relief scheint durch: die
+    # Hillshading-Helligkeit moduliert die Farbe zu diesem Anteil (0 = flach/kraeftig,
+    # 1 = volle Reliefschwankung). So sieht man Besitz UND Landform in derselben Zelle.
+    territory_relief: float = 0.55
+
 
 DEFAULT_MAP_CONFIG = MapConfig()

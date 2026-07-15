@@ -117,6 +117,11 @@ def _header(world: World, *, year: int, max_year: int, paused: bool, tempo: floa
     )
 
 
+def _owned(world: World) -> dict[int, int]:
+    """Der aktuelle Besitzstand als ``Region -> Polity`` (nur beanspruchte Regionen)."""
+    return {rid: r.owner for rid, r in world.regions.items() if r.owner is not None}
+
+
 def _frame(
     world: World,
     feed: deque[tuple[EventKind, str]],
@@ -127,6 +132,7 @@ def _frame(
     paused: bool,
     tempo: float,
     show_map: bool,
+    flash: frozenset[int] = frozenset(),
 ) -> RenderableType:
     """Setze einen vollstaendigen Frame zusammen (Kopf, Karte, Top-Polities, Feed)."""
     body: list[RenderableType] = [
@@ -134,7 +140,9 @@ def _frame(
     ]
     if show_map:
         # Die Karte liest den **aktuellen** Besitzstand ⇒ Grenzen wandern Jahr fuer Jahr.
-        body.append(render_map(world, seed=seed))
+        # ``flash`` sind die in DIESEM Jahr gewechselten Regionen: sie blitzen kurz auf,
+        # damit man die Veraenderung bemerkt (Aufgabe 6).
+        body.append(render_map(world, seed=seed, flash=flash))
     body.append(
         Panel(
             _polity_tafel(world),
@@ -175,17 +183,36 @@ def watch(
             feed.append((event.kind, erzaehle(world, log, event)))
         final = (world, log)
 
-    def frame(world: World, *, year: int, paused: bool, tempo: float) -> RenderableType:
+    def frame(
+        world: World, *, year: int, paused: bool, tempo: float,
+        flash: frozenset[int] = frozenset(),
+    ) -> RenderableType:
         return _frame(world, feed, seed=seed, year=year, max_year=max_year,
-                      paused=paused, tempo=tempo, show_map=show_map)
+                      paused=paused, tempo=tempo, show_map=show_map, flash=flash)
+
+    # Der Besitzstand des Vorjahres, um die in diesem Jahr gewechselten Regionen (Aufgabe
+    # 6) aufblitzen zu lassen. ``None`` beim ersten Frame ⇒ dort blitzt nichts.
+    prev: dict[int, int] | None = None
+
+    def changed(world: World) -> frozenset[int]:
+        nonlocal prev
+        cur = _owned(world)
+        blink = frozenset() if prev is None else frozenset(
+            rid for rid, owner in cur.items() if prev.get(rid) != owner
+        )
+        prev = cur
+        return blink
 
     if not console.is_terminal:
         # Kein TTY (Pipe/Test): gleichverteilte Schnappschuss-Frames statt Animation.
         marks = _snapshot_years(max_year, 5)
         for world, log in weltlauf(seed, years, cfg):
             ingest(world, log)
+            blink = changed(world)  # jedes Jahr fortschreiben, damit der Diff stimmt
             if world.year in marks:
-                console.print(frame(world, year=world.year, paused=False, tempo=speed))
+                console.print(
+                    frame(world, year=world.year, paused=False, tempo=speed, flash=blink)
+                )
         if final is None:  # years == 0: nur die Anfangswelt zeigen
             world = worldgen(Rng(seed), cfg)
             final = (world, EventLog())
@@ -200,7 +227,8 @@ def watch(
                 break
             ingest(world, log)
             live.update(
-                frame(world, year=world.year, paused=ctrl.paused, tempo=speed * ctrl.speed)
+                frame(world, year=world.year, paused=ctrl.paused,
+                      tempo=speed * ctrl.speed, flash=changed(world))
             )
             _pump(ctrl, base_delay / ctrl.speed)
 

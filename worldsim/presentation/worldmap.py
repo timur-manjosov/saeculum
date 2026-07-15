@@ -13,16 +13,29 @@ Ansicht in drei Lagen:
    Muendungen liegen ueber Biom und Territorium. Sie sind die sichtbarste Kausalkette der
    Karte: der Regen des Klimas laeuft durch die Taeler der Tektonik ins Meer;
 4. **Territorien**: jede Landzelle faellt an die naechstgelegene Region (Voronoi ueber
-   dem Graphen); gehoert die einer Polity, faerbt sich die Zelle **kraeftig** in deren
-   Farbe — die Glyphe bleibt das Biom, man sieht also weiterhin, WORAUF ein Reich sitzt.
+   dem Graphen); gehoert die einer Polity, wird sie zur **Politik** — und die liegt
+   leuchtend ueber der gedaempften Natur (Schritt 5, siehe unten).
+
+Das **Kernprinzip der politischen Lesbarkeit**: Natur gedaempft, Politik leuchtend.
+Unbeanspruchtes Land traegt das volle Terrain (Biom, Hillshading, Fluesse), aber
+**entsaettigt und abgedunkelt** (:func:`_muted_nature`) — es ist Landschaft, kein
+Anspruch. Beanspruchtes Land traegt die **kraeftige Farbe seiner Polity**, durch die das
+Relief noch durchscheint (die Hillshading-Helligkeit moduliert die Farbe,
+:func:`_territory_style`) — man sieht in einer Zelle beides: wem sie gehoert UND wie das
+Land aussieht. Der Helligkeits-/Saettigungskontrast traegt die Ablesbarkeit, nicht die
+Farbwahl. Als Redundanz fuer farbschwache Augen bekommt jede Polity zusaetzlich eine
+eigene **Glyphe** (:data:`_POLITY_GLYPHS`); Nachbar-Polities werden per Graphfaerbung
+(:func:`_polity_styles`) klar unterschiedlich eingefaerbt. **Grenzzellen** (an eine andere
+Polity oder an freies Land/Meer grenzend) werden akzentuiert, damit ein Reich als
+zusammenhaengendes Gebilde heraustritt; die **Hauptstadt** traegt einen deutlichen Sitz-
+Marker. Eine kompakte **Legende** unter der Karte nennt die groessten Reiche (Farbe +
+Glyphe) und die wichtigsten Terrain-Zeichen.
 
 Die Farben liegen in **zwei** Paletten, und das ist Absicht: die Natur traegt echte
 Erdtoene (:class:`~worldsim.presentation.palette.TerrainPalette` — Ozean in Tiefenstufen,
 Sand, gestaffelte Gruentoene, Fels und Schnee), waehrend die Rosé-Pine-Akzente der
 *Bedeutung* vorbehalten bleiben (Polity-Flaechen, Ereignisse, Chrome). So kann das Land
-natuerlich aussehen, ohne dass ein Reich in der Landschaft untergeht: die Natur ist
-gedaempft und **hoehenschattiert** (:func:`_hillshade` — eine Lichtquelle aus Nordwesten
-laesst Gebirge plastisch werden), die Politik liegt flach und kraeftig darueber.
+natuerlich aussehen, ohne dass ein Reich in der Landschaft untergeht.
 
 Read-only, kein semantischer RNG, keine Simulationslogik, **keine** Tile-Mikrosimulation
 oder Geografie-Physik — nur eine Ansicht ueber dem fertigen Hoehenfeld.
@@ -33,6 +46,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from rich.console import Group
 from rich.panel import Panel
 from rich.text import Text
 
@@ -123,9 +137,29 @@ _BIOME_STYLE: dict[Biome, tuple[str, str]] = {
     Biome.WUESTE: ("░", N.desert),
 }
 
-# Polity-Farben (kraeftig) aus der Palette. Zuerst die terrain-fremden Akzente,
-# damit die groessten Polities klar unterscheidbar bleiben; dann der Rest.
-_POLITY_TONES: tuple[str, ...] = (P.love, P.gold, P.iris, P.rose, P.foam, P.pine, P.text)
+# Polity-Farben (kraeftig) aus der Rosé-Pine-Palette und je eine unterscheidbare Glyphe
+# parallel dazu. Beide sind an DENSELBEN Index gebunden: wer eine andere Farbe bekommt,
+# bekommt auch eine andere Glyphe — so bleibt Besitz auch fuer farbschwache Augen lesbar
+# (Aufgabe 2). Die Reihenfolge ist nach Distinktheit sortiert: die ersten Akzente sind am
+# weitesten voneinander entfernt, damit die groessten (zuerst gefaerbten) Reiche klar
+# auseinanderfallen. Die Glyphen sind bewusst geometrische Formen aus dem Block "Geometric
+# Shapes" (U+25xx) — nahezu universell in Terminal-Schriften vorhanden (Stern-/Kreuzformen
+# wie ``★ ✦`` fehlen dagegen selbst in vollen Nerd Fonts) — und kollidieren mit KEINER
+# Biom-/Wasserglyphe (``● ■ ◆ ◉ ◈ ○ □`` gegen ``" , ; & # ░ ▲ ^ ~ ≈``). Die vorderen,
+# haeufigsten Indizes tragen die silhouetten-verschiedensten Formen (Kreis/Quadrat/Raute).
+_POLITY_TONES: tuple[str, ...] = (P.love, P.gold, P.iris, P.foam, P.rose, P.pine, P.text)
+_POLITY_GLYPHS: tuple[str, ...] = ("●", "■", "◆", "◉", "◈", "○", "□")
+
+# Die Legende (Aufgabe 5) nennt neben den Reichen die wichtigsten Terrain-Zeichen — je
+# Eintrag (Glyphe, Ton, Etikett). Bewusst knapp: die haeufigsten/lesbarsten Signale.
+_TERRAIN_KEY: tuple[tuple[str, str, str], ...] = (
+    ("≈", N.deep_sea, "sea"),
+    ("~", N.coast, "coast"),
+    ("━", N.stream, "river"),
+    ("▲", N.alpine, "mountains"),
+    ("&", N.forest, "forest"),
+    ("░", N.desert, "desert"),
+)
 
 
 def _water_style(
@@ -203,6 +237,43 @@ def _shade(color: str, factor: float) -> str:
     return f"#{red:02x}{green:02x}{blue:02x}"
 
 
+def _desaturate(color: str, amount: float) -> str:
+    """Ziehe einen ``#rrggbb``-Ton anteilig zu seinem Grauwert (``amount`` 0..1)."""
+    red, green, blue = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+    grey = 0.299 * red + 0.587 * green + 0.114 * blue  # wahrgenommene Helligkeit
+    red = round(red + (grey - red) * amount)
+    green = round(green + (grey - green) * amount)
+    blue = round(blue + (grey - blue) * amount)
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _muted_nature(color: str, factor: float, cfg: MapConfig) -> str:
+    """Unbeanspruchtes Land: entsaettigt, gedaempft, hoehenschattiert (das Kernprinzip).
+
+    Die Natur soll Landschaft bleiben, nicht mit der Politik um Aufmerksamkeit ringen —
+    also erst zu Grau ziehen, dann abdunkeln, dann die Reliefschattierung darauflegen. So
+    treten die kraeftigen Polity-Toene hervor, ohne dass Biom oder Relief unlesbar werden.
+    """
+    return _shade(_desaturate(color, cfg.nature_desaturation), factor * cfg.nature_dim)
+
+
+_BORDER_BRIGHTEN = 1.22  # Grenzzelle: heller als das hellste Innere ⇒ ein klarer Umriss
+
+
+def _territory_style(tone: str, factor: float, cfg: MapConfig, *, border: bool) -> str:
+    """Beanspruchtes Land: die Polity-Farbe, durch die das Relief scheint.
+
+    Die Hillshading-Helligkeit ``factor`` moduliert die Farbe nur zum Anteil
+    ``territory_relief`` — genug, dass Berg und Tal durchkommen, nicht so viel, dass die
+    Farbe kippt. **Grenzzellen** werden aufgehellt und fett gesetzt, das Innere dagegen nie
+    heller als der Rand: so umreisst ein heller, geschlossener Saum jedes Reich (Aufgabe 3).
+    """
+    if border:
+        return f"bold {_shade(tone, _BORDER_BRIGHTEN)}"
+    relief = 1.0 + (factor - 1.0) * cfg.territory_relief
+    return _shade(tone, min(relief, _BORDER_BRIGHTEN - 0.06))
+
+
 def _coastline(is_sea: np.ndarray) -> np.ndarray:
     """Meerzellen mit mindestens einem Landnachbarn — die Kuestenlinie."""
     height, width = is_sea.shape
@@ -234,11 +305,6 @@ def _latitude_axis(height: int) -> list[str]:
     return axis
 
 
-def _polity_tone(pid: EntityId, order: dict[EntityId, int]) -> str:
-    """Stabile Polity-Farbe nach Rang (gleiche Polity ⇒ immer dieselbe Farbe)."""
-    return _POLITY_TONES[order.get(pid, 0) % len(_POLITY_TONES)]
-
-
 def _nearest_region(coords: np.ndarray, width: int, height: int) -> np.ndarray:
     """Fuer jede Zelle den Index der naechstgelegenen Region (Voronoi ueber Koordinaten)."""
     xs = (np.arange(width) + 0.5) / width
@@ -249,6 +315,128 @@ def _nearest_region(coords: np.ndarray, width: int, height: int) -> np.ndarray:
     return (dx * dx + dy * dy).argmin(axis=2)  # (H, W) ⇒ Index in coords
 
 
+def _owner_grid(
+    owner_of: dict[EntityId, EntityId], nearest: np.ndarray, rids: list[EntityId],
+    is_sea: np.ndarray,
+) -> np.ndarray:
+    """Je Landzelle die Polity-Id ihres Eigners (``-1`` = frei oder Meer).
+
+    Das gemeinsame Raster fuer Grenzerkennung und Polity-Nachbarschaft: eine Landzelle
+    faellt an die naechste Region (Voronoi), deren Eigner — falls vorhanden — die Zelle
+    beansprucht. Meer traegt nie Territorium (Ozeane trennen Land), also ``-1``.
+    """
+    height, width = is_sea.shape
+    grid = np.full((height, width), -1, dtype=int)
+    for row in range(height):
+        for col in range(width):
+            if is_sea[row, col]:
+                continue
+            owner = owner_of.get(rids[int(nearest[row, col])])
+            if owner is not None:
+                grid[row, col] = owner
+    return grid
+
+
+def _borders(owner_grid: np.ndarray) -> np.ndarray:
+    """Beanspruchte Zellen, die an einen ANDEREN Eigner (oder freies Land/Meer) grenzen.
+
+    Der Umriss eines Reiches: eine Territorialzelle ist Grenze, wenn eine ihrer vier
+    orthogonalen Nachbarn einem anderen Eigner gehoert, frei ist oder ausserhalb der Karte
+    liegt (der Kartenrand zaehlt als Grenze). Vier- statt achtverbunden ⇒ ein sauberer,
+    ein Zeichen breiter Saum.
+    """
+    owned = owner_grid >= 0
+    border = np.zeros_like(owned)
+    for drow, dcol in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        shifted = np.full_like(owner_grid, -2)  # ausserhalb ⇒ -2 (immer "anders")
+        src = np.roll(np.roll(owner_grid, -drow, axis=0), -dcol, axis=1)
+        rs = slice(max(0, -drow), owner_grid.shape[0] - max(0, drow))
+        cs = slice(max(0, -dcol), owner_grid.shape[1] - max(0, dcol))
+        shifted[rs, cs] = src[rs, cs]
+        border |= owned & (shifted != owner_grid)
+    return border
+
+
+def _polity_styles(
+    world: World, owner_grid: np.ndarray,
+) -> dict[EntityId, int]:
+    """Weise jeder Polity einen Farb-/Glyphen-Index zu, sodass Nachbarn sich unterscheiden.
+
+    Gierige Graphfaerbung ueber der aus dem Territorium abgelesenen Nachbarschaft (Aufgabe
+    2): die Polities werden in stabiler Id-Reihenfolge gefaerbt (damit die Farbe ueber die
+    Jahre nicht flackert), jede nimmt bevorzugt ihren rang-eigenen Ton und weicht nur aus,
+    wenn ein bereits gefaerbter Nachbar ihn schon traegt. Bei ≤7 Toenen und der geringen
+    Grenz-Valenz einer Polity reichen die Toene immer — kollidierende Nachbarn bekommen
+    verlaesslich verschiedene Farben (und damit auch verschiedene Glyphen).
+    """
+    height, width = owner_grid.shape
+    adjacency: dict[EntityId, set[EntityId]] = {}
+    for row in range(height):
+        for col in range(width):
+            here = int(owner_grid[row, col])
+            if here < 0:
+                continue
+            for drow, dcol in ((1, 0), (0, 1)):  # nur zwei Richtungen ⇒ jedes Paar einmal
+                nrow, ncol = row + drow, col + dcol
+                if nrow >= height or ncol >= width:
+                    continue
+                other = int(owner_grid[nrow, ncol])
+                if other >= 0 and other != here:
+                    adjacency.setdefault(here, set()).add(other)
+                    adjacency.setdefault(other, set()).add(here)
+
+    ntones = len(_POLITY_TONES)
+    ranks = {pid: i for i, pid in enumerate(sorted(world.polities))}
+    style: dict[EntityId, int] = {}
+    for pid in sorted(world.polities):
+        used = {style[n] for n in adjacency.get(pid, ()) if n in style}
+        base = ranks[pid] % ntones
+        # Bevorzugt den rang-eigenen Ton, sonst den naechsten freien (rotierend).
+        choice = next(
+            ((base + k) % ntones for k in range(ntones) if (base + k) % ntones not in used),
+            base,  # mehr Nachbarn als Toene: faellt auf die Basis zurueck (praktisch nie)
+        )
+        style[pid] = choice
+    return style
+
+
+def _legend(
+    world: World, owner_grid: np.ndarray, style: dict[EntityId, int], *, max_named: int = 6
+) -> Text:
+    """Die kompakte Legende unter der Karte: groesste Reiche und Terrain-Zeichen (Aufgabe 5).
+
+    Reiche nach Territoriumsgroesse (aus dem Raster gezaehlt, damit die Legende exakt zur
+    gezeigten Karte passt); bei vielen werden nur die groessten namentlich genannt, der
+    Rest als ``+k more`` zusammengefasst. Farbe UND Glyphe je Reich — dieselben, mit denen
+    die Karte es malt.
+    """
+    ids, counts = np.unique(owner_grid[owner_grid >= 0], return_counts=True)
+    sizes = dict(zip(ids.tolist(), counts.tolist(), strict=True))
+    ranked = sorted(sizes, key=lambda p: (sizes[p], -p), reverse=True)
+
+    realms = Text("realms  ", style=P.subtle)
+    if not ranked:
+        realms.append("— none claimed —", style=P.muted)
+    for pid in ranked[:max_named]:
+        idx = style.get(pid, 0)
+        tone = _POLITY_TONES[idx]
+        realms.append(_POLITY_GLYPHS[idx], style=f"bold {tone}")
+        realms.append(f" {world.polities[pid].name}   ", style=tone)
+    if len(ranked) > max_named:
+        realms.append(f"+{len(ranked) - max_named} more", style=P.muted)
+
+    terrain = Text("terrain ", style=P.subtle)
+    for glyph, tone, label in _TERRAIN_KEY:
+        terrain.append(glyph, style=tone)
+        terrain.append(f" {label}   ", style=P.muted)
+
+    legend = Text()
+    legend.append_text(realms)
+    legend.append("\n")
+    legend.append_text(terrain)
+    return legend
+
+
 def render_map(
     world: World,
     seed: int = 0,
@@ -256,14 +444,17 @@ def render_map(
     *,
     width: int = MAP_WIDTH,
     height: int = MAP_HEIGHT,
+    flash: frozenset[EntityId] = frozenset(),
 ) -> Panel:
-    """Rendere die Karte als ``rich``-Panel: Terrain plus politische Territorien.
+    """Rendere die Karte als ``rich``-Panel: gedaempftes Terrain plus leuchtende Politik.
 
-    ``owners`` erlaubt es dem Replay, einen **rekonstruierten** Besitzstand zu
-    zeigen; ohne Angabe gilt der aktuelle Weltzustand (so wandern im Watch-Mode die
-    Grenzen Jahr fuer Jahr). Landzellen faerben sich in der Farbe der Polity, der
-    ihre naechste Region gehoert; Wasser bleibt Wasser; Hauptstaedte tragen die
-    Initiale ihrer Polity.
+    ``owners`` erlaubt es dem Replay, einen **rekonstruierten** Besitzstand zu zeigen;
+    ohne Angabe gilt der aktuelle Weltzustand (so wandern im Watch-Mode die Grenzen Jahr
+    fuer Jahr). Unbeanspruchtes Land traegt das entsaettigte, gedaempfte Terrain; wem eine
+    Zelle gehoert, faerbt sie in der kraeftigen Farbe seiner Polity (mit durchscheinendem
+    Relief) und traegt deren Glyphe. Grenzen werden akzentuiert, die Hauptstadt markiert.
+    ``flash`` (Regionen-Ids, im Watch-Modus die eben gewechselten) laesst deren Zellen kurz
+    aufblitzen. Unter der Karte steht eine kompakte Legende (Reiche + Terrain-Zeichen).
     """
     rids = sorted(world.regions)
     if not rids:
@@ -289,7 +480,12 @@ def render_map(
         if owners is not None
         else {rid: r.owner for rid, r in world.regions.items() if r.owner is not None}
     )
-    order = {pid: i for i, pid in enumerate(sorted(world.polities))}
+
+    # Die politische Lage: Besitzraster (Meer traegt nie Territorium), Grenzumriss und je
+    # Polity ein unterscheidbarer Stil (Farbe + Glyphe, Nachbarn verschieden gefaerbt).
+    owner_grid = _owner_grid(owner_of, nearest, rids, is_sea)
+    border = _borders(owner_grid)
+    style = _polity_styles(world, owner_grid)
 
     # Hauptstadt-Marker: nur wo die Polity ihren Sitz aktuell auch haelt.
     cap_cell: dict[tuple[int, int], EntityId] = {}
@@ -309,8 +505,11 @@ def render_map(
         for col in range(width):
             pid = cap_cell.get((row, col))
             if pid is not None:
+                # Hauptstadt: der Sitz als deutlicher Chip — die Initiale der Polity, fett
+                # in ihrem kraeftigen Ton auf dunklem Grund (Aufgabe 4). Wird zuerst
+                # gezeichnet, also auch sichtbar, falls der Sitz auf Wasser faellt.
                 letter = world.polities[pid].name[:1] or "?"
-                text.append(letter, style=f"bold {_polity_tone(pid, order)}")
+                text.append(letter, style=f"bold {_POLITY_TONES[style.get(pid, 0)]} on {P.overlay}")
                 continue
             if is_sea[row, col]:  # Wasser: das entscheidet die Geologie, nicht das Klima
                 if water.mouth[row, col]:
@@ -340,17 +539,34 @@ def render_map(
                 continue
 
             glyph, tone = _BIOME_STYLE[climate.biome[row, col]]
-            owner = owner_of.get(rids[int(nearest[row, col])])
-            if owner is not None:
-                # Die Polity faerbt die Flaeche FLACH und kraeftig (unbeschattet), die
-                # Glyphe bleibt das Biom: man sieht weiterhin, WORAUF ein Reich sitzt
-                # (Steppe, Regenwald, Wueste), und die Politik hebt sich klar von der
-                # gedaempft-schattierten Natur ab.
-                text.append(glyph, style=f"bold {_polity_tone(owner, order)}")
-            else:
-                # Natur: der Erdton, hoehenschattiert ⇒ Huegel und Gebirge treten plastisch
-                # aus der Ebene, ohne dass die Glyphe (das Biom) sich aendert.
-                text.append(glyph, style=_shade(tone, float(shade[row, col])))
+            owner = int(owner_grid[row, col])
+            if owner < 0:
+                # Natur: entsaettigt, gedaempft, hoehenschattiert — sie tritt zurueck,
+                # damit die Politik leuchtet (das Kernprinzip von Schritt 5).
+                text.append(glyph, style=_muted_nature(tone, float(shade[row, col]), cfg))
+                continue
+
+            idx = style.get(owner, 0)
+            ptone = _POLITY_TONES[idx]
+            if flash and rids[int(nearest[row, col])] in flash:
+                # Frischer Besitzwechsel (Watch-Modus, Aufgabe 6): kurz hell aufblitzen.
+                text.append(_POLITY_GLYPHS[idx], style=f"bold {P.text} on {ptone}")
+                continue
+            # Beanspruchtes Land: die Polity-Glyphe (Redundanz zur Farbe) in der Polity-
+            # Farbe, durch die das Relief scheint; Grenzzellen kraeftig als heller Umriss.
+            text.append(
+                _POLITY_GLYPHS[idx],
+                style=_territory_style(
+                    ptone, float(shade[row, col]), cfg, border=bool(border[row, col])
+                ),
+            )
         if row != height - 1:
             text.append("\n")
-    return Panel(text, title=f"world map · seed {seed}", title_align="left", border_style=P.muted)
+
+    legend = _legend(world, owner_grid, style)  # Aufgabe 5: Reiche + Terrain-Zeichen
+    return Panel(
+        Group(text, Text(), legend),
+        title=f"world map · seed {seed}",
+        title_align="left",
+        border_style=P.muted,
+    )
