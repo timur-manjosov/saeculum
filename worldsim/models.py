@@ -240,11 +240,19 @@ class Region:
 
     id: EntityId
     name: str = ""
+    # Schritt 2: die Tragfaehigkeit kommt jetzt aus der GEOGRAFIE (Biom/Klima/Wasser,
+    # siehe ``geo.derive``), nicht mehr aus einer RNG-Gleichverteilung. Fruchtbares
+    # Tiefland am Wasser traegt viel, Wueste/Eis/Hochgebirge wenig — und die Bevoelkerung
+    # konzentriert sich von selbst dorthin (die Systeme lesen dieses Feld unveraendert).
     food_capacity: float = 0.0
-    # Aenderung 5: Eisen ist "oft nicht lokal" (Konzept §2.2) — nur ein Teil der
-    # Regionen traegt ein Vorkommen. Eisenarme Nationen muessen Eisen importieren
-    # (Handelsabhaengigkeit), notfalls vom Rivalen — die Wurzel des Handelskriegs.
+    # Eisen ist "oft nicht lokal" (Konzept §2.2) — nur ein Teil der Regionen traegt ein
+    # Vorkommen. Ab Schritt 2 geografisch: eisenreich sind die Regionen mit genug
+    # Huegel/Bergen (Erz sitzt im gehobenen Fels). Eisenarme Nationen muessen importieren
+    # (Handelsabhaengigkeit) oder erobern — die Wurzel des Handelskriegs.
     iron_rich: bool = False
+    # Gold ist selten und geografisch (Schritt 2): nur die wenigen gebirgigsten Regionen
+    # tragen eine Ader. Wer sie haelt, ist reich — man kaempft um sie.
+    gold_rich: bool = False
     # Aenderung 7: die Geologie des Feldes. ``seismicity`` (0..1, aus dem Worldgen)
     # ist die Rate, mit der sich Gesteinsspannung aufbaut — 0 heisst aseismisch.
     # ``strain`` ist die aufgestaute Spannung selbst; erreicht sie 1, bricht sie

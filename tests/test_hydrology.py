@@ -12,14 +12,14 @@ from __future__ import annotations
 import numpy as np
 from worldsim.config import DEFAULT_MAP_CONFIG as CFG
 from worldsim.driver import simulate
-from worldsim.presentation.flow import NEIGHBOURS
-from worldsim.presentation.hydrology import (
+from worldsim.geo.flow import NEIGHBOURS
+from worldsim.geo.hydrology import (
     _LAKE_MIN_DEPTH,
     STREAM_FACTOR,
     Hydrology,
     build_hydrology,
 )
-from worldsim.presentation.worldmap import _HILL_RELIEF
+from worldsim.geo.terrain import HILL_RELIEF
 
 SEEDS = range(1, 41)
 
@@ -88,7 +88,7 @@ def test_rivers_rise_in_the_high_ground() -> None:
         for row, col in _sources(water):
             total += 1
             reliefs.append(float(relief[row, col]))
-            uphill += relief[row, col] >= _HILL_RELIEF
+            uphill += relief[row, col] >= HILL_RELIEF
 
     assert total > 300, total
     # Die Quelle liegt im Mittel deutlich ueber der eigenen Kruste — im Bergland.
@@ -199,7 +199,7 @@ def test_erosion_carves_valleys_without_beheading_the_mountains() -> None:
     """
     from dataclasses import replace
 
-    from worldsim.presentation.terrain import build_terrain
+    from worldsim.geo.terrain import MAP_HEIGHT, MAP_WIDTH, build_terrain
 
     flat = replace(CFG, erosion_strength=0.0)
     carved: list[float] = []
@@ -209,7 +209,7 @@ def test_erosion_carves_valleys_without_beheading_the_mountains() -> None:
     for seed in SEEDS:
         water = build_hydrology(seed)
         terrain = water.terrain
-        raw = build_terrain(seed, 52, 17, flat)  # dieselbe Welt, nie erodiert
+        raw = build_terrain(seed, MAP_WIDTH, MAP_HEIGHT, flat)  # dieselbe Welt, nie erodiert
         carved += _valley_depths(water, np.asarray(terrain.elevation))
         bare += _valley_depths(water, np.asarray(raw.elevation))
 
@@ -271,8 +271,8 @@ def test_a_river_in_the_desert_carries_foreign_water() -> None:
     einmal nur den, der AUSSERHALB der Wueste gefallen ist. Der Quotient ist der Anteil
     Fremdwasser, den ein Wuestenfluss traegt.
     """
-    from worldsim.presentation.climate import Biome
-    from worldsim.presentation.flow import (
+    from worldsim.geo.climate import Biome
+    from worldsim.geo.flow import (
         accumulate,
         downstream_links,
         fill_depressions,
@@ -318,11 +318,14 @@ def test_a_river_in_the_desert_carries_foreign_water() -> None:
 
 
 def test_hydrology_is_deterministic_and_cannot_bend_the_history() -> None:
-    """Gleicher Seed ⇒ gleiches Wasser; und das Wasser ruehrt die Simulation nicht an.
+    """Gleicher Seed ⇒ gleiches Wasser; und es zu bauen ruehrt die Simulation nicht an.
 
     Die Hydrologie zieht ueberhaupt keinen Zufall (Wasser wuerfelt nicht, es laeuft
-    bergab) — aber sie haengt am kosmetischen Strom von Terrain und Klima, und der darf
-    den semantischen Pfad nie beruehren.
+    bergab) und leitet sich rein aus Terrain und Klima ab — beide reine Funktionen des
+    Seeds. Seit Schritt 2 speist dasselbe Wasser die Tragfaehigkeit (Fluesse und Kueste
+    machen Land fruchtbar), es FORMT also die Geschichte; aber es fuers Rendering
+    aufzubauen zieht keinen Master-RNG und mutiert die Welt nicht — den semantischen Pfad
+    beruehrt es nie.
     """
     first = np.asarray(build_hydrology(42).flow)
     assert first.tolist() == np.asarray(build_hydrology(42).flow).tolist()

@@ -96,17 +96,13 @@ def test_scarcity_raises_grievance() -> None:
     ganze Mechanismus.
     """
     quiet = Config(tension_threshold=1e9, grievance_inequality_rate=0.0)
-    fertile = replace(
-        quiet,
-        region_food_capacity_min=40.0,
-        region_food_capacity_max=60.0,
-    )
-    barren = replace(
-        quiet,
-        region_food_capacity_min=2.0,
-        region_food_capacity_max=3.0,
-        initial_getreide=0.0,
-    )
+    # Schritt 2: die Tragfaehigkeit ist geografisch; ``fertility_capacity_scale`` skaliert
+    # das ganze Land — hoch fuer eine fruchtbare, niedrig fuer eine karge Welt. Der Wert
+    # muss echten UEBERFLUSS stiften, nicht bloss ein bisschen mehr Land: sattes Land
+    # nimmt den Nationen auch das Kriegsmotiv (kein Hunger ⇒ keine Eroberung ⇒ kein
+    # Gebietsverlust ⇒ keine Hungersnot beim Verlierer). Erst dann ist der Groll wirklich 0.
+    fertile = replace(quiet, fertility_capacity_scale=20.0)
+    barren = replace(quiet, fertility_capacity_scale=0.2, initial_getreide=0.0)
     wf, _ = simulate(seed=7, years=120, cfg=fertile)
     wb, _ = simulate(seed=7, years=120, cfg=barren)
     assert _peak_worker_grievance(wf) == pytest.approx(0.0)  # satt: kein Grund zum Groll

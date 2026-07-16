@@ -119,8 +119,7 @@ def test_population_never_negative_under_heavy_famine() -> None:
     """Auch mit brutaler Hungersnot-Mechanik bleibt die Bevoelkerung >= 0."""
     cfg = Config(
         famine_deaths_per_deficit=1000.0,
-        region_food_capacity_min=2.0,
-        region_food_capacity_max=3.0,
+        fertility_capacity_scale=0.2,  # karges Land (Schritt 2: Tragfaehigkeit geografisch)
     )
     world, _ = simulate(seed=5, years=80, cfg=cfg)
     for pol in world.polities.values():

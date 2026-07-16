@@ -269,7 +269,7 @@ def production(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
             s,
             getreide=s.getreide + land * efficiency * labor,
             eisen=s.eisen + iron_regions * cfg.iron_per_region * efficiency,
-            gold=s.gold + _gold_income(pol, cfg),
+            gold=s.gold + _gold_income(world, pol, cfg),
         )
     return world
 
@@ -303,13 +303,18 @@ def consumption(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
     return world
 
 
-def _gold_income(pol: Polity, cfg: Config) -> float:
+def _gold_income(world: World, pol: Polity, cfg: Config) -> float:
     """Jaehrliche Gold-Foerderung des Territoriums (die EINE Wahrheit darueber).
 
-    ``production`` foerdert sie, ``_fiskaldruck`` misst die Pflichten daran.
+    Ab Schritt 2 GEOGRAFISCH: eine kleine Grundfoerderung je Region (Handel, Abgaben)
+    plus ein kraeftiger Zuschlag je *goldreicher* Region (``Region.gold_rich`` — die
+    wenigen Adern im Fels). Wer die Adern haelt, ist reich; wer sie erobert, wird es.
+    ``production`` foerdert sie, ``_kronmittel``/``_fiskaldruck`` messen die Pflichten daran.
     """
     efficiency = 1.0 + pol.tech_level * cfg.tech_production_bonus
-    return len(pol.territory) * cfg.gold_per_region * efficiency
+    gold_regions = sum(1 for r in pol.territory if world.regions[r].gold_rich)
+    base = len(pol.territory) * cfg.gold_per_region
+    return (base + gold_regions * cfg.gold_per_rich_region) * efficiency
 
 
 def _staatspflichten(pol: Polity, cfg: Config) -> float:
@@ -811,8 +816,8 @@ def spannung(world: World, pol: Polity, cfg: Config, log: EventLog) -> Decision:
     decision = Decision()
     for label, raw in (
         (FactorLabel.VOLKSDRUCK, _volksgroll(pol, cfg)),
-        (FactorLabel.ELITENDRUCK, _elitendruck(pol, cfg)),
-        (FactorLabel.FISKALDRUCK, _fiskaldruck(pol, cfg)),
+        (FactorLabel.ELITENDRUCK, _elitendruck(world, pol, cfg)),
+        (FactorLabel.FISKALDRUCK, _fiskaldruck(world, pol, cfg)),
         (FactorLabel.AUSSENDRUCK, _aussendruck(world, pol, cfg)),
     ):
         pressure = weights[label] * raw
@@ -872,7 +877,7 @@ def tension(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
 # zweites Groll-Mass.
 
 
-def _kronmittel(pol: Polity, cfg: Config) -> float:
+def _kronmittel(world: World, pol: Polity, cfg: Config) -> float:
     """Was die Krone in einem Jahr aufbringen kann: Foerderung + angezapfter Schatz.
 
     Die EINE Wahrheit ueber die Mittel des Staates. Sie ist stets positiv (Territorium
@@ -880,10 +885,10 @@ def _kronmittel(pol: Polity, cfg: Config) -> float:
     jeden davon abgeleiteten Druck auf sein Maximum, egal wie klein Heer oder Adel
     waeren. Der Schatz ist der Puffer, die Foerderung der Boden.
     """
-    return _gold_income(pol, cfg) + pol.stocks.gold / cfg.fiscal_buffer_years
+    return _gold_income(world, pol, cfg) + pol.stocks.gold / cfg.fiscal_buffer_years
 
 
-def _elitendruck(pol: Polity, cfg: Config) -> float:
+def _elitendruck(world: World, pol: Polity, cfg: Config) -> float:
     """Eliten-Ueberproduktion: Anteil der Elite ohne Amt und ohne Pfruende (0..1).
 
     Eine Elite traegt zweierlei: die **Aemter**, die das Land hergibt, und die
@@ -902,12 +907,14 @@ def _elitendruck(pol: Polity, cfg: Config) -> float:
         return 0.0
     posts = len(pol.territory) * cfg.elite_posts_per_region
     prebends = (
-        _kronmittel(pol, cfg) / cfg.elite_gold_claim if cfg.elite_gold_claim > 0.0 else 0.0
+        _kronmittel(world, pol, cfg) / cfg.elite_gold_claim
+        if cfg.elite_gold_claim > 0.0
+        else 0.0
     )
     return _clamp01((elite - min(posts, prebends)) / elite)
 
 
-def _fiskaldruck(pol: Polity, cfg: Config) -> float:
+def _fiskaldruck(world: World, pol: Polity, cfg: Config) -> float:
     """Fiskaldruck: wie weit die Staatspflichten die Mittel der Krone uebersteigen (0..1).
 
     Ein struktureller Fehlbetrag ist der Druck. Weil er an den *Pflichten* haengt (nicht
@@ -919,7 +926,7 @@ def _fiskaldruck(pol: Polity, cfg: Config) -> float:
     duty = _staatspflichten(pol, cfg)
     if duty <= 0.0:
         return 0.0
-    return _clamp01(1.0 - _kronmittel(pol, cfg) / duty)
+    return _clamp01(1.0 - _kronmittel(world, pol, cfg) / duty)
 
 
 def _aussendruck(world: World, pol: Polity, cfg: Config) -> float:

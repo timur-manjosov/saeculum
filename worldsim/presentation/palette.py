@@ -86,6 +86,7 @@ class TerrainPalette:
     deep_sea: str   # offene Tiefsee
     shelf: str      # ersoffener Kontinentalsockel / flaches Randmeer
     coast: str      # der helle Kuestensaum
+    sea_ice: str    # gefrorener Polarozean (Packeis) — die sichtbare Polkappe
     # Suesswasser (heller, kuehler als das Meer ⇒ es liest sich als anderes Wasser).
     river: str
     stream: str     # der grosse Strom — heller/breiter
@@ -113,6 +114,8 @@ NATURAL_EARTH = TerrainPalette(
     deep_sea="#1e3a63",
     shelf="#2f6488",
     coast="#6aa9c6",
+    sea_ice="#cddbe6",  # blasses Eisblau-Weiss: kalt, aber vom Schnee-Weiss des Landes lesbar
+
     river="#5aa6d0",
     stream="#93d1e8",
     lake="#3d7ba8",

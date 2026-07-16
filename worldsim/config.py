@@ -21,21 +21,72 @@ class Config:
     """
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
-    # Defaults erhoehen.
-    config_version: int = 13
+    # Defaults erhoehen. v14: die Region-Eigenschaften kommen ab jetzt aus der
+    # Geografie (Schritt 2), nicht mehr aus dem RNG — jede Welt ist eine andere.
+    config_version: int = 14
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
     num_nations: int = 6
-    region_food_capacity_min: float = 8.0
-    region_food_capacity_max: float = 22.0
-    # Zusaetzliche Kanten ueber den verbindenden Ring hinaus (Grenzen).
-    extra_edges: int = 16
     initial_population: int = 200
     # Anfangsbestaende (Getreide/Eisen/Gold) je Nation.
     initial_getreide: float = 80.0
     initial_eisen: float = 0.0
     initial_gold: float = 0.0
+
+    # --- Schritt 2: Region-Eigenschaften aus der GEOGRAFIE ableiten --------
+    # Die Simulation laeuft ab jetzt AUF der Geografie (``worldsim.geo.derive``): Lage,
+    # Tragfaehigkeit, Eisen und Gold der Regionen kommen nicht mehr aus dem RNG, sondern
+    # aus Hoehe, Klima, Biom und Wasser. Kein Anpassungs-Algorithmus — nur die EINGABEN
+    # der bestehenden Systeme werden geografisch, dann konzentriert sich die Bevoelkerung
+    # von selbst auf das gute Land.
+    #
+    # Fruchtbarkeit je Zelle = Biom-Grundwert x Wasserzugang x Hoehe. Die Biom-Grundwerte
+    # als ``(Enum-Name, Wert)``: ``config`` liegt unter ``geo`` und darf das ``Biome``-Enum
+    # nicht importieren (Einbahn-Schichten) — ``derive`` loest den Namen zurueck auf.
+    # Grasland/Wald tragen am meisten (die Kornkammer), Wueste/Eis/Fels am wenigsten.
+    fertility_by_biome: tuple[tuple[str, float], ...] = (
+        ("GRASLAND", 1.00),
+        ("GEMAESSIGTER_WALD", 0.90),
+        ("FEUCHTGEBIET", 0.85),
+        ("REGENWALD", 0.75),
+        ("SAVANNE", 0.55),
+        ("STEPPE", 0.45),
+        ("TAIGA", 0.40),
+        ("TUNDRA", 0.15),
+        ("WUESTE", 0.10),
+        ("ALPIN", 0.08),
+        ("GLETSCHER", 0.02),
+    )
+    # Wasserzugang (Fluss/See/Kueste) hebt die Fruchtbarkeit: fruchtbares Tiefland AM
+    # Wasser ist die Wiege. Hochland senkt sie (duenne Boeden), mit einem Boden.
+    fertility_water_bonus: float = 0.45
+    fertility_altitude_penalty: float = 0.80
+    fertility_altitude_floor: float = 0.15
+    # Skala von der aufsummierten Zell-Fruchtbarkeit einer Region auf ihre
+    # ``food_capacity``. Geeicht (Schritt 2), sodass die mediane Region grob dieselbe
+    # Tragfaehigkeit traegt wie die alte Gleichverteilung (~15) — die Wirtschaft bleibt
+    # im geeichten Bereich, nur ihre VERTEILUNG wird geografisch (fruchtbares Tal viel,
+    # Wueste wenig).
+    fertility_capacity_scale: float = 2.00
+    # Eisen: eine Region ist eisenreich, wenn mindestens dieser Anteil ihres Landes
+    # Huegel/Berge traegt (Erz sitzt im gehobenen Fels). Gold: nur die wenigen
+    # gebirgigsten Regionen tragen eine Ader (Anteil aller Regionen).
+    iron_hill_share: float = 0.25
+    gold_region_fraction: float = 0.12
+    # Startplatzierung (Aufgabe 4): die Hauptstaedte gehen auf das beste Land — hohe
+    # Fruchtbarkeit, mit Zuschlag fuer Kuesten- und Suesswasserlage.
+    capital_coast_bonus: float = 0.30
+    capital_water_bonus: float = 0.20
+    # Die WIEGE ist tragfaehig: die Anfangs-Hauptstadt bekommt mindestens diese
+    # Kapazitaet. Man gruendet ein Reich dort, wo das Land die Anfangsbevoelkerung
+    # ernaehren KANN — sonst haette es dort nie eine Hauptstadt gegeben. Ohne diesen Boden
+    # startete eine Nation auf kargem Land sofort im Defizit: die Nothilfe blaehte die
+    # Staatspflichten, und das Reich ginge schon im ersten Jahr bankrott, statt den Druck
+    # ueber Jahrzehnte aufzubauen. Der Bezug ist der Anfangsbedarf (200 Koepfe x 0.04 = 8)
+    # mit etwas Luft; er floort NUR die sechs Hauptstadt-Felder, nicht die karge Wueste
+    # ringsum — die bleibt duenn (die alte Gleichverteilung garantierte dasselbe Minimum).
+    capital_min_capacity: float = 11.0
 
     # --- Schichtung: Anfangs-Zusammensetzung der Bevoelkerung --------------
     # Groessen-Anteile der drei Schichten (Arbeiter/Soldat/Elite), summieren zu 1.
@@ -55,18 +106,20 @@ class Config:
     # Landkapazitaet. Fehlen Arbeiter (starke Militarisierung), sinkt die Ernte
     # (Liebigsches Minimum) — die Guns-versus-Butter-Kopplung.
     workers_per_capacity: float = 5.0
-    # Einfache Foerderung je beanspruchter Region: Eisen (Waffen/Werkzeug) und
-    # Gold (Schatz). Gold entsteht ueberall; Eisen nur in Regionen mit Vorkommen
-    # (siehe ``Region.iron_rich``), daher hier je *eisenreicher* Region.
-    # Die Gold-Foerderung ist mit Aenderung 6 angehoben, weil der Schatz seither
-    # einen echten Abfluss hat (Sold + Nothilfe): ohne die Anhebung erstickte die
-    # Expansion an ihrem Goldpreis.
+    # Einfache Foerderung je beanspruchter Region: Eisen (Waffen/Werkzeug) und Gold
+    # (Schatz). Beide sind jetzt GEOGRAFISCH (Schritt 2): Eisen nur aus eisenreichen
+    # Regionen (``Region.iron_rich`` — genug Huegel/Berge), Gold aus einer kleinen
+    # Grundfoerderung je Region PLUS einem kraeftigen Zuschlag fuer die wenigen
+    # goldreichen (``Region.gold_rich`` — die gebirgigsten). So wird der Ressourcenkrieg
+    # geografisch: man kaempft um die Eisenberge und die Goldadern.
     iron_per_region: float = 2.0
-    gold_per_region: float = 4.0
-    # Aenderung 5: Anteil der Regionen mit Eisenvorkommen (Eisen ist nicht ueberall
-    # — die Quelle der Handelsabhaengigkeit). Der Foerdersatz oben ist erhoeht, damit
-    # die Welt-Eisenmenge grob erhalten bleibt (nur die Verteilung wird ungleich).
-    iron_region_fraction: float = 0.5
+    # Die Grundfoerderung bleibt beim alten Satz (4.0): sie haelt die fiskalische Bilanz
+    # einer frischen Nation im Ueberschuss, damit der Fiskaldruck sich ueber Jahrzehnte
+    # aufbaut (mit dem wachsenden Hof), statt sofort in den Bankrott zu kippen. Das Gold
+    # wird geografisch durch den ZUSCHLAG der wenigen goldreichen Regionen — nicht dadurch,
+    # dass man die Grundfoerderung aushungert.
+    gold_per_region: float = 4.0        # Grundfoerderung je Region (Handel, Abgaben)
+    gold_per_rich_region: float = 8.0   # Zuschlag je goldreicher Region (die Ader im Fels)
     # Aenderung 7: die jaehrliche Ernteschwankung ist FORT. Sie war ein Wuerfelwurf im
     # Ereignispfad — und zwar der folgenreichste: er erzeugte die Hungersnot und damit
     # den Volksdruck, also die halbe Spannungsmechanik. Der Hunger ist jetzt
@@ -580,12 +633,16 @@ DEFAULT_CONFIG = Config()
 
 @dataclass(frozen=True)
 class MapConfig:
-    """Stellschrauben der Karten-Geologie (Praesentation).
+    """Stellschrauben der Welt-GEOGRAFIE (Tektonik, Klima, Hydrologie).
 
-    **Bewusst getrennt von** :class:`Config`: die Karte ist eine Ansicht, kein Teil
-    der Simulation. Sie aendert nie, WELCHE Fakten entstehen, gehoert also nicht in
-    die Lauf-Identitaet ``(seed, years, config_version)`` — wer hier dreht, bekommt
-    eine andere Karte, aber dieselbe Geschichte.
+    Getrennt von :class:`Config` gehalten (verschiedene Belange), aber **seit Schritt 2
+    NICHT mehr kosmetisch**: die Simulation laeuft jetzt AUF dieser Geografie — der
+    Worldgen leitet die Region-Eigenschaften (Tragfaehigkeit, Eisen, Gold, Lage,
+    Nachbarschaft) daraus ab (:mod:`worldsim.geo.derive`). Wer hier dreht, bekommt darum
+    eine andere Karte UND eine andere Geschichte. Die Defaults gehoeren damit zur
+    Reproduzierbarkeits-Identitaet wie die von :class:`Config`: eine semantische Aenderung
+    hier verlangt einen ``config_version``-Bump. (Der Worldgen baut die Geografie stets aus
+    ``DEFAULT_MAP_CONFIG`` — die Karte, die man SIEHT, ist die, auf der die Welt LAEUFT.)
     """
 
     # --- Tektonik: die grosse Struktur -------------------------------------
@@ -623,12 +680,16 @@ class MapConfig:
     # Welten mit einer Kette). Darueber (ab ~0.30) frisst sie die Gipfel.
     erosion_strength: float = 0.15
 
-    # --- Meeresspiegel ------------------------------------------------------
-    # Als Ziel-Landanteil ausgedrueckt: die Schwelle wird je Welt als Quantil der
-    # Hoehenverteilung gezogen. Ein fester Hoehenwert waere seed-abhaengig mal eine
-    # Wasserwelt, mal ein Trockenplanet; so traegt jeder Seed grob dieselbe Kueste.
-    # Faellt ZULETZT, nach der Erosion: sonst verschoebe das abgetragene Material den
-    # Landanteil.
+    # --- Meeresspiegel: der Ozeananteil (die Welt ist Wasser mit Kontinenten) -----
+    # Der EINE Regler fuer "wieviel Ozean". Als Ziel-*Landanteil* ausgedrueckt (Ozeananteil
+    # = 1 - land_fraction), weil die Schwelle je Welt als Quantil der Hoehenverteilung
+    # gezogen wird: ``0.30`` heisst, die oberen 30 % der Zellen sind Land ⇒ **70 % Ozean**.
+    # Das ist die erdkarten-artige Bilanz: das Meer dominiert, die Kontinente sind wenige
+    # grosse Massen (sie folgen den kontinentalen Platten, nicht dem Rauschen), klar vom
+    # Wasser getrennt — kein ueber die Flaeche verstreutes Inselgekruemel. Ein fester
+    # Hoehenwert waere seed-abhaengig mal eine Wasserwelt, mal ein Trockenplanet; das
+    # Quantil traegt jedem Seed dieselbe Kueste an. Faellt ZULETZT, nach der Erosion:
+    # sonst verschoebe das abgetragene Material den Landanteil.
     land_fraction: float = 0.30
 
     # --- Klima: Temperatur --------------------------------------------------
@@ -665,6 +726,18 @@ class MapConfig:
     dry_moisture: float = 0.40    # darunter: Steppe (bzw. Tundra statt Taiga)
     humid_moisture: float = 0.55  # darueber: geschlossener Wald / Regenwald
 
+    # --- Klima: Meereis (die sichtbaren Polkappen) --------------------------
+    # Der Ozean an den Polen gefriert: eine WASSERzelle, deren Temperatur (0..1) unter
+    # diese Schwelle faellt, wird als Packeis gezeichnet statt als offene See. Das ist der
+    # Grund, warum die Karte oben und unten sofort als PLANET liest — auch wenn dort, wie
+    # auf der Erde (Arktis, Antarktis), gar kein Land liegt. An Land macht schon die
+    # Temperatur die Kaeltebiome (Tundra/Gletscher); das Meereis erweitert dieselbe
+    # Temperatur nur auf das Wasser, das kein Biom traegt. Bewusst knapp ueber der
+    # Aequator-zu-Pol-Temperatur der obersten Zeilen (~0.22) gewaehlt, damit ein klarer
+    # Saum von ein bis zwei Zeilen gefriert, ohne den ganzen Ozean zu vereisen. Reine
+    # ANSICHT (kein Biom, keine Simulationsgroesse) — wie die Tiefenstufen des Meeres.
+    sea_ice_temp: float = 0.28
+
     # --- Hydrologie: Fluesse und Seen ---------------------------------------
     # Ab so viel akkumuliertem Abfluss gilt eine Zelle als Fluss. Die Einheit ist
     # "Zellen vollen Regens": 8.0 heisst, die Zelle entwaessert ein Gebiet, das so viel
@@ -672,10 +745,14 @@ class MapConfig:
     # niedriger ⇒ viele Baeche, hoeher ⇒ nur die grossen Stroeme.
     # Weil der Niederschlag am Luvhang der Gebirge faellt, entspringen die Fluesse von
     # selbst oben und bleiben der Wueste fern: die Schwelle waehlt nur, ab welcher Groesse
-    # ein Lauf gezeichnet wird. Geeicht an der gemessenen Abflussverteilung ueber 40 Seeds
-    # (Median einer Landzelle 0.04, p90 0.35, groesster Strom 4.0): bei 0.40 tragen rund
-    # 9 % der Landzellen einen Fluss — ein Netz, kein Sumpf.
-    river_threshold: float = 0.40
+    # ein Lauf gezeichnet wird. Geeicht an der gemessenen Abflussverteilung ueber 40 Seeds:
+    # ein Netz, kein Sumpf. Der Wert haengt an der Kartengroesse — die Akkumulation zaehlt
+    # Zellen, ein feineres Gitter fuellt also groessere Einzugsgebiete und traegt mehr
+    # Abfluss. Mit der breiten 2:1-Karte (68x17 statt 52x17, siehe ``terrain.MAP_WIDTH``)
+    # wuchsen die Einzugsflaechen um rund ein Drittel; die Schwelle ist von 0.40 auf 0.42
+    # nachgezogen, damit die kleinsten Rinnsale nicht ueberhandnehmen (gemessen: sonst faellt
+    # die Kennzahl "ein Wuestenfluss traegt ueberwiegend Fremdwasser" unter ihre Schranke).
+    river_threshold: float = 0.42
 
     # --- Darstellung: Hoehenschattierung (Hillshading) ----------------------
     # Eine simulierte Lichtquelle beleuchtet das Relief: dem Licht zugewandte Haenge

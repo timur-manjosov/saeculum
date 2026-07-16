@@ -64,16 +64,21 @@ def test_the_earthquake_sets_pressure_instead_of_triggering_an_event() -> None:
     * gemessen: der Volksdruck der getroffenen Nation liegt in den 15 Jahren DANACH im
       Mittel hoeher als davor. Das Beben setzt Druck; es entlaedt ihn nicht.
     """
-    world, log = simulate(seed=42, years=400)
+    _, log = simulate(seed=42, years=400)
     for e in log.by_kind(EventKind.ERDBEBEN):
         assert not e.causes  # exogener Wurzel-Event: er hat keine Ursache in der Welt
         felder = {eff.field for eff in e.effects}
         assert felder <= {"food_capacity", "gold", "population"}
-    # Die Narbe im Land ist dauerhaft: getroffene Felder tragen weniger als der Worldgen
-    # ihnen gab. (Der Regionen-Zustand ist der Beleg, nicht die Erzaehlung.)
-    struck = {e.subjects[-1] for e in log.by_kind(EventKind.ERDBEBEN)}
-    assert any(world.regions[r].food_capacity < DEFAULT_CONFIG.region_food_capacity_min
-               for r in struck)
+    # Die Narbe im Land ist dauerhaft: das Beben senkt die Tragfaehigkeit des Feldes. Der
+    # Beleg ist der Effekt selbst (before/after), nicht ein Vergleich mit einer festen
+    # Kapazitaet — die kommt seit Schritt 2 aus der Geografie und ist je Feld verschieden.
+    scars = [
+        eff
+        for e in log.by_kind(EventKind.ERDBEBEN)
+        for eff in e.effects
+        if eff.field == "food_capacity"
+    ]
+    assert scars and all(float(eff.after) < float(eff.before) for eff in scars)  # type: ignore[arg-type]
 
 
 def test_technology_accumulates_and_unlocks_ages() -> None:

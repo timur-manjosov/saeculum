@@ -20,8 +20,15 @@ import itertools
 import numpy as np
 from worldsim.config import DEFAULT_MAP_CONFIG
 from worldsim.driver import simulate
-from worldsim.presentation.terrain import Terrain, build_terrain
-from worldsim.presentation.worldmap import _HILL_RELIEF, _PEAK_RELIEF, _TRENCH_RELIEF
+from worldsim.geo.terrain import (
+    HILL_RELIEF,
+    MAP_HEIGHT,
+    MAP_WIDTH,
+    PEAK_RELIEF,
+    TRENCH_RELIEF,
+    Terrain,
+    build_terrain,
+)
 
 SEEDS = range(1, 31)
 MIN_CHAIN = 6  # so viele zusammenhaengende Zellen heissen "Kette"
@@ -29,12 +36,12 @@ MIN_CHAIN = 6  # so viele zusammenhaengende Zellen heissen "Kette"
 
 def _peaks(terrain: Terrain) -> np.ndarray:
     """Gebirgszellen: Land, das sich ueber seine eigene Kruste hebt."""
-    return (terrain.elevation >= terrain.sea_level) & (terrain.relief >= _PEAK_RELIEF)
+    return (terrain.elevation >= terrain.sea_level) & (terrain.relief >= PEAK_RELIEF)
 
 
 def _ridges(terrain: Terrain) -> np.ndarray:
     """Gehobenes Land ueberhaupt (Huegel und Gebirge)."""
-    return (terrain.elevation >= terrain.sea_level) & (terrain.relief >= _HILL_RELIEF)
+    return (terrain.elevation >= terrain.sea_level) & (terrain.relief >= HILL_RELIEF)
 
 
 def _trenches(terrain: Terrain) -> np.ndarray:
@@ -46,7 +53,7 @@ def _trenches(terrain: Terrain) -> np.ndarray:
     return (
         (terrain.elevation < terrain.sea_level)
         & terrain.oceanic
-        & (terrain.relief <= _TRENCH_RELIEF)
+        & (terrain.relief <= TRENCH_RELIEF)
     )
 
 
@@ -173,7 +180,15 @@ def test_subduction_digs_a_trench() -> None:
 
         deepest = np.unravel_index(np.argmin(terrain.elevation), terrain.elevation.shape)
         assert oceanic[deepest], seed
-        assert _border_mask(plate_of)[deepest], seed
+        # ... und an einer Plattengrenze. Gemessen als ABSTAND zur Naht, nicht als
+        # 1-Zellen-Bandmaske: der Graben liegt seewaerts der Naht (Profil um u=0.28), und
+        # auf der breiten 2:1-Karte loest die feinere Spaltenaufloesung diesen Versatz auf —
+        # der tiefste Punkt faellt dann gelegentlich eine Spalte neben das Grenzband
+        # (gemessen ueber 30 Seeds: schlimmstenfalls 0.5 Zellen), ist aber unverkennbar der
+        # Graben. Dieselbe 1.5-Zellen-Schranke wie fuer die Grabenzellen unten.
+        deepest_mask = np.zeros(terrain.elevation.shape, dtype=bool)
+        deepest_mask[deepest] = True
+        assert (_gap_to_border(terrain, deepest_mask) or 0.0) < 1.5, seed
 
         trench = _trenches(terrain)
         if not trench.any():
@@ -195,7 +210,7 @@ def test_tectonics_puts_the_mountains_at_the_boundaries() -> None:
     """
     def terrain_without_tectonics(seed: int) -> Terrain:
         cfg = dataclasses.replace(DEFAULT_MAP_CONFIG, mountain_strength=0.0)
-        return build_terrain(seed, 52, 17, cfg)
+        return build_terrain(seed, MAP_WIDTH, MAP_HEIGHT, cfg)
 
     with_tectonics = [_largest_component(_peaks(build_terrain(s))) for s in SEEDS]
     without = [_largest_component(_peaks(terrain_without_tectonics(s))) for s in SEEDS]
@@ -205,10 +220,14 @@ def test_tectonics_puts_the_mountains_at_the_boundaries() -> None:
 
 
 def test_map_cannot_bend_the_history() -> None:
-    """Die Karte ist kosmetisch: sie zieht aus einem anderen Namensraum als die Fakten.
+    """Die Geografie FORMT die Geschichte — aber sie zu zeichnen ruehrt sie nicht an.
 
-    Gepinnt, weil es die Invariante der ganzen Schicht ist — wer an der Tektonik dreht,
-    bekommt eine andere Karte, aber dieselbe Geschichte.
+    Seit Schritt 2 ist die Karte kanonisch: der Worldgen leitet Tragfaehigkeit, Erze und
+    Grenzen aus ihr ab, die Simulation laeuft AUF ihr. Gepinnt wird darum nicht mehr 'die
+    Karte ist kosmetisch', sondern die Read-only-Invariante der Schicht: ``build_terrain``
+    ist eine reine Funktion des Seeds (zieht KEINEN Master-RNG, mutiert die Welt nicht),
+    also verschiebt das Bauen der Karte fuers Rendering keinen einzigen semantischen Zug —
+    dieselbe Geografie speist die Historie, aber das Zeichnen kann sie nicht biegen.
     """
     def trace(seed: int) -> list[tuple[int, str]]:
         _, log = simulate(seed=seed, years=80)

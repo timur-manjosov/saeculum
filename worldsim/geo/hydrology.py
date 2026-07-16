@@ -9,7 +9,7 @@ hat; er umgeht das Gebirge, das im Weg steht; er endet im Meer.
 Nichts davon ist eine Regel. Es gibt keine Zeile, die "zeichne einen Fluss von den Bergen
 zum Meer" sagt. Es gibt nur:
 
-1. **Abfluss** — jede Zelle fliesst zum tiefsten Nachbarn (:mod:`worldsim.presentation.flow`);
+1. **Abfluss** — jede Zelle fliesst zum tiefsten Nachbarn (:mod:`worldsim.geo.flow`);
 2. **Akkumulation** — jede Zelle sammelt den **Niederschlag** aller Zellen, die zu ihr
    abfliessen. Niederschlag heisst: was die Luft hier fallen laesst, nicht was sie noch
    traegt (:func:`rain.moisture_and_rain`) — und fallen laesst sie ihn am Luvhang der
@@ -38,14 +38,14 @@ from functools import lru_cache
 import numpy as np
 
 from worldsim.config import DEFAULT_MAP_CONFIG, MapConfig
-from worldsim.presentation.climate import Climate, build_climate
-from worldsim.presentation.flow import (
+from worldsim.geo.climate import Climate, build_climate
+from worldsim.geo.flow import (
     NEIGHBOURS,
     accumulate,
     downstream_links,
     fill_depressions,
 )
-from worldsim.presentation.terrain import MAP_HEIGHT, MAP_WIDTH, Terrain
+from worldsim.geo.terrain import MAP_HEIGHT, MAP_WIDTH, Terrain
 
 __all__ = ["Hydrology", "build_hydrology"]
 

@@ -4,12 +4,12 @@ Reine **Visualisierung ueber dem Adjazenzgraphen**. Die Regionen tragen eine
 geografische Koordinate (aus worldgen, Determinismus-Vertrag); hier wird daraus eine
 Ansicht in drei Lagen:
 
-1. **Meer** kommt aus :mod:`worldsim.presentation.terrain` — Graben, Tiefsee, Schelf und
+1. **Meer** kommt aus :mod:`worldsim.geo.terrain` — Graben, Tiefsee, Schelf und
    Kuestensaum sind geologische Tatsachen (siehe :func:`_water_style`);
-2. **Land** kommt aus :mod:`worldsim.presentation.climate` — jede Landzelle traegt das
+2. **Land** kommt aus :mod:`worldsim.geo.climate` — jede Landzelle traegt das
    Biom, das Temperatur und Feuchte aus ihr machen. Die Gebirgsketten bleiben lesbar,
    weil hohe Kaemme alpinen Fels und Schnee tragen und die Biombaender an ihnen knicken;
-3. **Suesswasser** kommt aus :mod:`worldsim.presentation.hydrology` — Fluesse, Seen und
+3. **Suesswasser** kommt aus :mod:`worldsim.geo.hydrology` — Fluesse, Seen und
    Muendungen liegen ueber Biom und Territorium. Sie sind die sichtbarste Kausalkette der
    Karte: der Regen des Klimas laeuft durch die Taeler der Tektonik ins Meer;
 4. **Territorien**: jede Landzelle faellt an die naechstgelegene Region (Voronoi ueber
@@ -51,13 +51,13 @@ from rich.panel import Panel
 from rich.text import Text
 
 from worldsim.config import DEFAULT_MAP_CONFIG, MapConfig
+from worldsim.geo.climate import Biome, latitudes
+from worldsim.geo.flow import NEIGHBOURS
+from worldsim.geo.hydrology import STREAM_FACTOR, Hydrology, build_hydrology
+from worldsim.geo.terrain import MAP_HEIGHT, MAP_WIDTH, TRENCH_RELIEF
 from worldsim.models import EntityId, World
-from worldsim.presentation.climate import Biome, latitudes
-from worldsim.presentation.flow import NEIGHBOURS
-from worldsim.presentation.hydrology import STREAM_FACTOR, Hydrology, build_hydrology
 from worldsim.presentation.palette import NATURAL_EARTH as N
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
-from worldsim.presentation.terrain import MAP_HEIGHT, MAP_WIDTH
 
 __all__ = ["render_map"]
 
@@ -73,15 +73,9 @@ __all__ = ["render_map"]
 # eine Ebene liegt auf ihrer Kruste (Median +0.02), ein Ozeanboden auch (-0.02) — nur
 # Orogenese und Subduktion schieben eine Zelle davon weg.
 #
-# Geeicht an der gemessenen Relief-Verteilung ueber 60 Seeds (Land p90 +0.47, p97 +0.95;
-# ausgewaschener Ozeanboden p10 -0.40, p2 -1.09).
-# Die beiden Landschwellen teilen sich die Arbeit genau wie die beiden Hoehenquellen:
-# Huegel liegen auf der Skala des fBm (die Detailrauheit reicht bis ~0.08) — deshalb
-# traegt JEDE Welt Huegel. Gebirge liegen auf der Skala der Tektonik, die das Rauschen um
-# ein Vielfaches ueberragt — deshalb traegt nur eine Welt mit Konvergenz Gebirge.
-_HILL_RELIEF = 0.08    # darueber: gewellt (Huegel) — das macht schon das Rauschen
-_PEAK_RELIEF = 0.35    # darueber: Gebirge — das macht nur die Tektonik
-_TRENCH_RELIEF = -0.55  # darunter: unter die eigene Kruste gerissen ⇒ Tiefseegraben
+# Die Relief-Schwellen (Huegel/Gebirge/Graben) leben jetzt in :mod:`worldsim.geo.terrain`
+# — sie sind eine Eigenschaft des Reliefs, kein Darstellungsdetail, und der Worldgen liest
+# sie ebenso (Berge tragen Eisen). Nur ``TRENCH_RELIEF`` braucht die Wasser-Stilwahl hier.
 _SHELF_DEPTH = 0.20    # so flach unter dem Meeresspiegel gilt Wasser als Kuestensaum
 
 # Zeichenzellen sind etwa doppelt so hoch wie breit (dasselbe ``_CHAR_RATIO`` wie in
@@ -97,6 +91,11 @@ _COAST = ("~", N.coast)      # Wasser mit Landnachbar: die Kuestenlinie, hell
 _SHELF = ("≈", N.shelf)      # flaches Wasser ueber ersoffenem Sockel
 _DEEP_SEA = ("≈", N.deep_sea)  # offene Tiefsee — dieselbe Glyphe, dunkler Ton
 _TRENCH = ("≋", N.abyss)     # der Abgrund
+# Packeis: der gefrorene Polarozean. Die dichte Schattierungsglyphe liest sich als feste,
+# gebrochene Flaeche (kein offenes ``≈``); der blasse Eiston macht Pol zu Pol eine sichtbare
+# Kappe — DAS Signal, das die Karte sofort als Planet lesen laesst (Aufgabe 3). Das Eis
+# ueberlagert JEDE Wasserart (auch Kueste/Muendung), sonst risse ein Kuestensaum die Kappe auf.
+_SEA_ICE = ("▒", N.sea_ice)
 
 # Das Suesswasser tritt HELL und in einem KUEHLEREN Blau als das Meer heraus — es ist der
 # Faden, an dem man die Welt liest, und liegt flach (unbeschattet), damit es nicht im
@@ -154,6 +153,7 @@ _POLITY_GLYPHS: tuple[str, ...] = ("●", "■", "◆", "◉", "◈", "○", "�
 # Eintrag (Glyphe, Ton, Etikett). Bewusst knapp: die haeufigsten/lesbarsten Signale.
 _TERRAIN_KEY: tuple[tuple[str, str, str], ...] = (
     ("≈", N.deep_sea, "sea"),
+    ("▒", N.sea_ice, "polar ice"),
     ("~", N.coast, "coast"),
     ("━", N.stream, "river"),
     ("▲", N.alpine, "mountains"),
@@ -175,7 +175,7 @@ def _water_style(
     """
     if coastal:
         return _COAST
-    if oceanic and relief <= _TRENCH_RELIEF:
+    if oceanic and relief <= TRENCH_RELIEF:
         return _TRENCH                 # die Subduktion hat den Meeresboden weggerissen
     if not oceanic or depth > -_SHELF_DEPTH:
         # Ersoffener Kontinentalsockel oder flaches Randmeer. Auch ein gefluteter
@@ -465,6 +465,7 @@ def render_map(
     climate, terrain = water.climate, water.terrain
     relief, oceanic = terrain.relief, terrain.oceanic
     elevation = np.asarray(terrain.elevation)
+    temperature = np.asarray(climate.temperature)  # fuer das Meereis der Polkappen
     is_sea = elevation < terrain.sea_level
     coastal = _coastline(is_sea)
     cfg = DEFAULT_MAP_CONFIG
@@ -512,6 +513,12 @@ def render_map(
                 text.append(letter, style=f"bold {_POLITY_TONES[style.get(pid, 0)]} on {P.overlay}")
                 continue
             if is_sea[row, col]:  # Wasser: das entscheidet die Geologie, nicht das Klima
+                if temperature[row, col] < cfg.sea_ice_temp:
+                    # Der Polarozean ist gefroren: Packeis ueberlagert jede Wasserart, damit
+                    # die Kappe geschlossen bleibt (Aufgabe 3 — die Karte liest als Planet).
+                    glyph, tone = _SEA_ICE
+                    text.append(glyph, style=_shade(tone, float(water_shade[row, col])))
+                    continue
                 if water.mouth[row, col]:
                     glyph, tone = _MOUTH  # hier erreicht ein Strom das Meer
                     text.append(glyph, style=_shade(tone, float(water_shade[row, col])))

@@ -453,11 +453,19 @@ def test_static_shows_indented_why_note_for_turning_points() -> None:
 # --- Invariante: der headless Kern bleibt abhaengigkeitsfrei ------------------
 
 def test_core_imports_without_presentation_deps() -> None:
-    """Import des Kerns zieht **kein** rich/numpy/opensimplex nach (Einbahn-Schichten)."""
+    """Import des Kerns zieht die RENDERING-Schicht (``rich``) nicht nach.
+
+    Schritt 2 hat die Geografie in den Kern gezogen: ``worldsim.geo`` leitet die
+    Region-Eigenschaften ab (die Simulation laeuft AUF der Geografie), und der Worldgen
+    baut sie ueber numpy/opensimplex. Diese sind seither legitime **Worldgen**-
+    Abhaengigkeiten — kein Rendering. Die Einbahn-Invariante, die bleibt und die dieser
+    Test schuetzt: der Kern weiss nichts von der DARSTELLUNG. ``rich`` (TUI/Farbe/Chronik-
+    Optik) darf beim blossen ``simulate`` NIE geladen werden.
+    """
     code = (
         "import sys, worldsim.driver, worldsim.chronicle\n"
         "worldsim.driver.simulate(seed=1, years=3)\n"
-        "leaked = [m for m in ('rich', 'numpy', 'opensimplex') if m in sys.modules]\n"
+        "leaked = [m for m in ('rich',) if m in sys.modules]\n"
         "print('LEAK' if leaked else 'CLEAN', leaked)\n"
     )
     result = subprocess.run(

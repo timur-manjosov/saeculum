@@ -4,7 +4,7 @@ Dieses Modul weiss nur, was eine Zeile fuer eine Breite steht und wie hoch das L
 Daraus macht es zwei Felder: was die Luft noch **traegt** (Feuchte) und was sie hier
 **fallen laesst** (Niederschlag).
 
-Warum es unter :mod:`worldsim.presentation.terrain` steht und nicht im Klima, wo es
+Warum es unter :mod:`worldsim.geo.terrain` steht und nicht im Klima, wo es
 hingehoerte: weil die **Erosion** den Regen braucht. Ein Fluss schneidet sein Tal mit dem
 Wasser, das auf ihn faellt — also muss dasselbe Regenfeld, das spaeter die Fluesse fuellt,
 schon die Taeler schneiden, in denen sie liegen werden. Gemessen ist das kein Detail: mit

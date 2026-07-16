@@ -7,20 +7,20 @@ name = "worldsim"
 version = "0.0.0"
 description = "History Machine — eine emergente Welt-Simulation (headless Kern)"
 requires-python = ">=3.11"
-# Der Kern bleibt Standard-Python: KEINE Runtime-Abhaengigkeiten.
-dependencies = []
+# Schritt 2: die Simulation laeuft AUF der Geografie — ``worldsim.geo`` leitet die
+# Region-Eigenschaften beim Worldgen aus Hoehe/Klima/Wasser ab und braucht dafuer
+# numpy/opensimplex. Sie sind damit Kern-(Worldgen-)Abhaengigkeiten. Das RENDERING
+# (rich) bleibt der Praesentation vorbehalten — der Kern weiss nichts von der Ansicht.
+dependencies = ["numpy==2.5.1", "opensimplex==0.4.5.1"]
 
 [project.optional-dependencies]
-# Praesentation (Phase 6): Farbe, Karte, Statistik. NUR fuer die
-# presentation-Schicht — der headless Kern bleibt abhaengigkeitsfrei.
-# Versionen gepinnt auf den getesteten Stand (reproduzierbare Praesentation).
-presentation = ["rich==15.0.0", "numpy==2.5.1", "opensimplex==0.4.5.1"]
+# Praesentation (Phase 6): Farbe, Chronik-Optik, Live-Ansicht. ``rich`` ist die einzige
+# reine Darstellungs-Abhaengigkeit und bleibt hier — nie vom Kern geladen.
+presentation = ["rich==15.0.0"]
 dev = [
     "pytest==9.1.1",
     "ruff==0.15.20",
     "rich==15.0.0",
-    "numpy==2.5.1",
-    "opensimplex==0.4.5.1",
 ]
 
 [project.scripts]

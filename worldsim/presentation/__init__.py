@@ -12,7 +12,17 @@ Zwei Prinzipien tragen alles:
   Log (kein Re-Simulieren): Replay reproduziert die Historie konsistent.
 """
 
-from worldsim.presentation.climate import Biome, Climate, build_climate, latitudes
+from worldsim.geo import (
+    Biome,
+    Climate,
+    Hydrology,
+    Plate,
+    Terrain,
+    build_climate,
+    build_hydrology,
+    build_terrain,
+    latitudes,
+)
 from worldsim.presentation.components import (
     bilanz_tafel,
     ereignis_text,
@@ -23,7 +33,6 @@ from worldsim.presentation.components import (
     zeitalter_regel,
 )
 from worldsim.presentation.explore import explore
-from worldsim.presentation.hydrology import Hydrology, build_hydrology
 from worldsim.presentation.palette import ROSE_PINE_MOON, Palette
 from worldsim.presentation.query import warum_entitaet, warum_event
 from worldsim.presentation.render import Steuerung, replay
@@ -35,7 +44,6 @@ from worldsim.presentation.stats import (
     sparkline,
     zusammenfassung_zeilen,
 )
-from worldsim.presentation.terrain import Plate, Terrain, build_terrain
 from worldsim.presentation.visual import (
     ViewState,
     VisualEffect,

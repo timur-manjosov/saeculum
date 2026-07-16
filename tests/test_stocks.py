@@ -53,10 +53,10 @@ def test_iron_and_gold_are_produced() -> None:
 
 def test_grain_surplus_drives_growth() -> None:
     """Reichliches Getreide traegt Wachstum: Bevoelkerungs-Meilensteine feuern."""
-    fertile = Config(
-        region_food_capacity_min=40.0,
-        region_food_capacity_max=60.0,
-    )
+    # Schritt 2: die Tragfaehigkeit kommt aus der Geografie — der Regler dafuer ist
+    # ``fertility_capacity_scale`` (skaliert das ganze Land). Ein hoher Wert macht eine
+    # fruchtbare Welt.
+    fertile = Config(fertility_capacity_scale=6.0)
     world, log = simulate(seed=42, years=100, cfg=fertile)
     assert any(e.kind == EventKind.BEVOELKERUNG_MEILENSTEIN for e in log)
     # Bevoelkerung ist ueber den Anfangsstand hinaus gewachsen.
@@ -69,11 +69,7 @@ def test_grain_shortage_drives_famine() -> None:
     Aenderung 7: der Mangel wird nicht mehr gewuerfelt (die Ernteschwankung ist fort).
     Karges Land traegt die Anfangsbevoelkerung schlicht nicht — Malthus, kein Wetter.
     """
-    barren = Config(
-        region_food_capacity_min=2.0,
-        region_food_capacity_max=3.0,
-        initial_getreide=0.0,
-    )
+    barren = Config(fertility_capacity_scale=0.2, initial_getreide=0.0)
     _, log = simulate(seed=5, years=120, cfg=barren)
     famines = [e for e in log if e.kind == EventKind.HUNGERSNOT]
     assert famines

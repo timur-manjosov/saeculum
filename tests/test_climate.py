@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import numpy as np
 from worldsim.driver import simulate
-from worldsim.presentation.climate import Biome, Climate, build_climate, latitudes
-from worldsim.presentation.worldmap import _PEAK_RELIEF
+from worldsim.geo.climate import Biome, Climate, build_climate, latitudes
+from worldsim.geo.terrain import PEAK_RELIEF
 
 SEEDS = range(1, 31)
 HORSE_LOW, HORSE_HIGH = 15.0, 40.0  # die Rossbreiten, grosszuegig gefasst
@@ -25,7 +25,7 @@ def _land(climate: Climate) -> np.ndarray:
 
 
 def _peaks(climate: Climate) -> np.ndarray:
-    return _land(climate) & (climate.terrain.relief >= _PEAK_RELIEF)
+    return _land(climate) & (climate.terrain.relief >= PEAK_RELIEF)
 
 
 def _abs_lat(climate: Climate) -> np.ndarray:
@@ -232,7 +232,12 @@ def test_every_world_is_habitable() -> None:
 
 
 def test_climate_is_deterministic_and_cannot_bend_the_history() -> None:
-    """Gleicher Seed ⇒ gleiches Klima; und das Klima ruehrt die Simulation nicht an."""
+    """Gleicher Seed ⇒ gleiches Klima; und es zu bauen ruehrt die Simulation nicht an.
+
+    Das Klima FORMT die Geschichte (seit Schritt 2 speist es ueber Biom und Feuchte die
+    Tragfaehigkeit), aber es ist eine reine Funktion des Seeds und zieht keinen
+    Master-RNG — es fuers Rendering aufzubauen verschiebt darum keinen semantischen Zug.
+    """
     first = np.asarray(build_climate(42).moisture)
     assert first.tolist() == np.asarray(build_climate(42).moisture).tolist()
     assert first.tolist() != np.asarray(build_climate(99).moisture).tolist()

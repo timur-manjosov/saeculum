@@ -49,13 +49,44 @@ import numpy as np
 from opensimplex import OpenSimplex
 
 from worldsim.config import DEFAULT_MAP_CONFIG, MapConfig
-from worldsim.presentation.flow import accumulate, steepest_descent
-from worldsim.presentation.rain import moisture_and_rain
+from worldsim.geo.flow import accumulate, steepest_descent
+from worldsim.geo.rain import moisture_and_rain
 from worldsim.rng import Rng, Stream
 
-__all__ = ["MAP_HEIGHT", "MAP_WIDTH", "Plate", "Terrain", "build_terrain"]
+__all__ = [
+    "HILL_RELIEF",
+    "MAP_HEIGHT",
+    "MAP_WIDTH",
+    "PEAK_RELIEF",
+    "TRENCH_RELIEF",
+    "Plate",
+    "Terrain",
+    "build_terrain",
+]
 
-MAP_WIDTH = 52   # Kartenbreite in Zeichen
+# Relief-Schwellen (Hoehe ueber der EIGENEN Krustenbasis, s. :attr:`Terrain.relief`) —
+# die geografische Klassifikation, an der sowohl die Karte die Land-Glyphen waehlt als
+# auch der Worldgen die Ressourcen ableitet (Berge tragen Eisen). Sie leben hier, weil
+# sie Eigenschaften des Reliefs sind, nicht der Darstellung. Geeicht an der gemessenen
+# Relief-Verteilung ueber 60 Seeds (Land p90 +0.47, p97 +0.95; Ozeanboden p10 -0.40).
+# Huegel liegen auf der Skala des fBm (Rauheit bis ~0.08) ⇒ JEDE Welt traegt Huegel;
+# Gebirge auf der Skala der Tektonik ⇒ nur eine Welt mit Konvergenz traegt Gebirge.
+HILL_RELIEF = 0.08     # darueber: gewelltes Land (Huegel) — das macht schon das Rauschen
+PEAK_RELIEF = 0.35     # darueber: Gebirge — das macht nur die Tektonik
+TRENCH_RELIEF = -0.55  # darunter: unter die eigene Kruste gerissen ⇒ Tiefseegraben
+
+# Kartengroesse in Zeichen. Breite und Hoehe legen zusammen mit ``_CHAR_RATIO`` das
+# **Seitenverhaeltnis der Welt** fest — der eine sichtbare Regler dafuer, ob die Karte
+# wie eine abgewickelte Kugel liegt oder wie ein Quadrat. Weil die Zeichenzelle doppelt
+# so hoch wie breit ist, ist das dargestellte Verhaeltnis (Breite/_CHAR_RATIO)/Hoehe:
+# 68/2/17 = **2:1** (breit, erdkarten-artig). Die Hoehe von 17 Zeilen ist kein Zufall,
+# sondern die untere Grenze, ab der die Geologie noch traegt: sie muss die Pole flaechen-
+# treu aufloesen (Klima), zusammenhaengende Gebirgsketten zulassen (Tektonik) und darf die
+# Einzugsgebiete nicht so vergroessern, dass die Karte in Fluessen ersaeuft (Hydrologie).
+# Wer hier dreht, aendert nur die ANSICHT (die Karte ist kosmetisch); die Flussdichte
+# muss dann ueber ``MapConfig.river_threshold`` nachgezogen werden (skaliert mit der
+# Einzugsflaeche, also mit der Zellzahl).
+MAP_WIDTH = 68   # Kartenbreite in Zeichen
 MAP_HEIGHT = 17  # Kartenhoehe in Zeilen
 
 # Zeichenzellen sind etwa doppelt so hoch wie breit. Das Feld lebt im Einheits-

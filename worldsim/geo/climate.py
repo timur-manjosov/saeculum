@@ -11,7 +11,7 @@ Die Kette
    ueber dem Meeresspiegel. Der Hoehengradient ist stark genug, dass der hoechste Gipfel
    auch am Aequator unter die Schneegrenze faellt — es braucht deshalb *keine* getrennte
    "Schnee-Hoehenzone": sie faellt aus der Temperatur heraus, breitenunabhaengig.
-2. **Wind und Regen** kommen aus :mod:`worldsim.presentation.rain`: drei Windbaender je
+2. **Wind und Regen** kommen aus :mod:`worldsim.geo.rain`: drei Windbaender je
    Hemisphaere, eine Luftmasse, die landeinwaerts zieht, austrocknet und an Steigungen
    orografisch abregnet — der **Regenschatten**. Das Modul steht bewusst UNTER dem Klima,
    weil schon die Erosion des Terrains denselben Regen braucht: wer ein Tal schneidet,
@@ -33,8 +33,8 @@ import numpy as np
 from opensimplex import OpenSimplex
 
 from worldsim.config import DEFAULT_MAP_CONFIG, MapConfig
-from worldsim.presentation.rain import latitudes, moisture_and_rain, wind_bands
-from worldsim.presentation.terrain import MAP_HEIGHT, MAP_WIDTH, Terrain, build_terrain
+from worldsim.geo.rain import latitudes, moisture_and_rain, wind_bands
+from worldsim.geo.terrain import MAP_HEIGHT, MAP_WIDTH, Terrain, build_terrain
 from worldsim.rng import Rng
 
 __all__ = ["Biome", "Climate", "build_climate", "latitudes"]
