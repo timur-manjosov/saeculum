@@ -33,7 +33,7 @@ from worldsim.models import World
 from worldsim.presentation.components import balken, feed_tafel, zeitalter_regel
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.visual import ViewState
-from worldsim.presentation.worldmap import render_map
+from worldsim.presentation.worldmap import MAP_VIEWS, POLITICAL_VIEW, render_map
 from worldsim.systems import bevoelkerung
 
 __all__ = ["Steuerung", "replay"]
@@ -44,15 +44,21 @@ _TOP = 6  # angezeigte Top-Nationen
 
 @dataclass
 class Steuerung:
-    """Beobachtungs-Steuerung: Tempo, Pause, Einzelschritt, Beenden (Aufgabe 8)."""
+    """Beobachtungs-Steuerung: Tempo, Pause, Einzelschritt, Kartenansicht, Beenden.
+
+    Reine Beobachter-Zustaende — nichts hiervon beruehrt die Simulation. Die Kartenansicht
+    (``m``) gehoert genau deshalb hierher: welche der beiden Ansichten man sieht, ist eine
+    Frage an den Betrachter, nicht an die Welt.
+    """
 
     speed: float = 1.0
     paused: bool = False
     step: bool = False
     quit: bool = False
+    view: str = POLITICAL_VIEW
 
     def taste(self, key: str) -> None:
-        """Verarbeite eine Steuertaste (Leertaste=Pause, n=Schritt, +/-=Tempo, q=Ende)."""
+        """Verarbeite eine Steuertaste (Leertaste=Pause, n=Schritt, +/-=Tempo, m=Karte, q=Ende)."""
         if key in (" ", "p"):
             self.paused = not self.paused
         elif key in ("n", "\x1b"):  # n oder Pfeil (grob): ein Schritt
@@ -62,6 +68,10 @@ class Steuerung:
             self.speed = min(self.speed * 1.5, 64.0)
         elif key == "-":
             self.speed = max(self.speed / 1.5, 0.1)
+        elif key == "m":
+            # Zwischen der politischen und der Terrain-Ansicht umschalten: jede ist fuer
+            # ihren Zweck aufgeraeumt, keine muss beides koennen.
+            self.view = MAP_VIEWS[(MAP_VIEWS.index(self.view) + 1) % len(MAP_VIEWS)]
         elif key in ("q", "\x03"):
             self.quit = True
 
@@ -142,13 +152,14 @@ def _frame(
         (f"    nations {len(view.territory_counts())}", P.pine),
         ("    ", ""),
         (age_name, P.foam),
+        ("    m: map", P.muted),
     )
     body: list[RenderableType] = [header]
     # Zeitalter-Wechsel: im Eroeffnungsjahr ein Banner quer ueber den Frame.
     if boundary:
         body.append(zeitalter_regel(age_name, year))
     if show_map:
-        body.append(render_map(world, seed=seed, owners=dict(view.owner)))
+        body.append(render_map(world, seed=seed, owners=dict(view.owner), view=ctrl.view))
     body.append(_top_table(world, view))
     body.append(feed_tafel(feed))
     return Group(*body)

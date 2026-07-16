@@ -54,6 +54,16 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--map", action="store_true", help="Prozedurale Biom-/Territorien-Karte anzeigen."
     )
     extras.add_argument(
+        "--map-view",
+        choices=("political", "terrain"),
+        default="political",
+        help=(
+            "Kartenansicht: political (Politik als Flaeche, Terrain angedeutet) oder "
+            "terrain (Geografie in voller Farbe, Politik als Umriss). In watch/replay "
+            "auch zur Laufzeit per 'm' umschaltbar."
+        ),
+    )
+    extras.add_argument(
         "--why",
         type=int,
         default=None,
@@ -169,7 +179,7 @@ def _run_extras(args: argparse.Namespace, world: World, log: EventLog, cfg: Conf
         for line in zusammenfassung_zeilen(world, log, cfg, args.years):
             print(line)
     if args.map:
-        console.print(render_map(world, seed=args.seed))
+        console.print(render_map(world, seed=args.seed, view=args.map_view))
     if args.why is not None:
         console.print("\n[bold]why-chain for entity[/]")
         for line in warum_entitaet(world, log, args.why):

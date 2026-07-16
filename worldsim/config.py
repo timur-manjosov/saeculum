@@ -21,9 +21,9 @@ class Config:
     """
 
     # Reproduzierbarkeits-Identitaet: bei jeder semantischen Aenderung der
-    # Defaults erhoehen. v14: die Region-Eigenschaften kommen ab jetzt aus der
-    # Geografie (Schritt 2), nicht mehr aus dem RNG — jede Welt ist eine andere.
-    config_version: int = 14
+    # Defaults erhoehen. v15: das Terrain ist Barriere und Korridor (Schritt 3) — die
+    # Nachbarschaft ist nicht mehr uniform, jede Kante hat ihren Preis.
+    config_version: int = 15
 
     # --- Weltgenerierung ---------------------------------------------------
     num_regions: int = 28
@@ -87,6 +87,70 @@ class Config:
     # mit etwas Luft; er floort NUR die sechs Hauptstadt-Felder, nicht die karge Wueste
     # ringsum — die bleibt duenn (die alte Gleichverteilung garantierte dasselbe Minimum).
     capital_min_capacity: float = 11.0
+
+    # --- Schritt 3: Wegekosten aus dem Terrain (Barriere und Korridor) -----
+    # Dieselbe Figur wie Schritt 2, eine Stufe weiter: nicht die Tragfaehigkeit einer
+    # Region, sondern der **Preis der Kante** zwischen zweien kommt jetzt aus der
+    # Geografie (``geo.derive._cell_travel_cost``). Damit hoert die Nachbarschaft auf,
+    # uniform zu sein: hinter dem Gebirge liegt ein teurer Nachbar, den Fluss hinunter
+    # ein billiger. Es gibt weiterhin keine Sonderregel ("stoppe am Berg") — Expansion,
+    # Handel und Konflikt waegen laengst Kosten gegen Ertrag ab, sie bekommen nur endlich
+    # die richtigen Kosten. Die Grenze am Gebirgskamm ist dann eine FOLGE, kein Gesetz.
+    #
+    # Alle fuenf sind Multiplikatoren auf eine Zelle; **1.0 ist die offene Ebene**, und das
+    # ist der Angelpunkt: eine Welt mit lauter Einsen verhaelt sich exakt wie vor Schritt 3
+    # (die alte uniforme Adjazenz ist der Sonderfall "jede Kante kostet 1"). Ueber 1
+    # Barriere, unter 1 Korridor. Sie ueberlagern sich multiplikativ, also ist die
+    # Flussmuendung (Fluss x Kueste) der billigste Weg der Welt und der Wuestengrat der
+    # teuerste — ohne dass eine Zeile das eine oder andere nennt.
+    #
+    # Geeicht an der gemessenen Kantenverteilung (30 Seeds, 1743 Kanten). Die Kanten
+    # zerfallen in genau die Arten, die das Konzept verlangt (median je Art):
+    #
+    #   Land zu Land     38 % der Kanten, **1.00** (p10 0.60 das Tal, p90 2.20 der Kamm)
+    #   Ufer             21 %,            0.60 — der Hafen: Land trifft Schelf
+    #   Wasser zu Wasser 41 %,            2.30 (p10 0.60 die Kuestenstrasse und die
+    #                                     Meerenge, p90 4.00 der offene Ozean)
+    #
+    # Der Landgraph liegt exakt auf der alten uniformen 1.0 — die Wirtschaft von Schritt 2
+    # bleibt im geeichten Bereich (gemessen: die Weltbevoelkerung aendert sich um 0.3 %),
+    # nur ihre VERTEILUNG wird geografisch. Ueber der Gesamtverteilung: median 1.00, ein
+    # Viertel bei 0.60 oder darunter (die Korridore), ein Zehntel bei 4.00 (die Waende).
+    #
+    # Das Wasser traegt BEIDE Enden, und das ist der Kern: dieselbe See ist die billigste
+    # Strasse (am Ufer entlang) und die teuerste Wand (drei Zellen weiter draussen). Ein
+    # frueherer Entwurf gab dem Schelf nur einen Rabatt auf den Wasserpreis (4.0 x 0.6 =
+    # 2.4) und liess ihn damit eine Barriere bleiben — gemessene Folge: die KUESTENVOELKER
+    # waren die isolierten (31 % ohne jeden Handelspartner gegen 16 % der Binnenlaender),
+    # also genau das Gegenteil der Geschichte. Seetransport war billiger als der Landweg;
+    # wer das Meer nur als Hindernis fuehrt, dreht die Welt um.
+    #
+    # Der Gebirgs-Satz greift erst ueber ``HILL_RELIEF`` (die Ebene ist umsonst); bei
+    # einem Gipfel (Relief ~0.5) traegt er rund +1.7.
+    #
+    # EHRLICH GEMESSEN, damit es niemand nachjagt: das Gebirge ist als ZELLE ein Preis
+    # (median 2.48 gegen 1.00 der Ebene), aber es formt kaum GRENZEN — auf den Kanten, an
+    # denen die Reiche stehen bleiben, ist es nur 1.1x ueberrepraesentiert (die offene See
+    # 8.8x, die Wueste 2.3x). Der Grund ist geometrisch und kein Reglerfehler: eine Naht
+    # ist median 5 Zellen lang, und eine Kette kreuzt sie schraeg, also bleibt fast immer
+    # eine Kueste oder ein Flusstal als Weg herum — der Kantenpreis (das Minimum, s.
+    # ``derive._adjacency``) findet ihn. Auf Naehten MIT Gebirge kostet die typische Zelle
+    # 2.47, das Minimum aber 0.60. Das ist nicht falsch, sondern die Kuestenstrasse um das
+    # Massiv, und Gebirge stellen ohnehin nur ~1.5 % aller Naht-Zellen.
+    # Drei Reparaturen wurden gemessen und alle drei VERWORFEN, weil sie den Gebirgs-Riegel
+    # mit der Fluss-Ader bezahlen: Quantil p25 statt Minimum (Gebirgs-Naht 1.08 -> 1.82,
+    # aber Fluss-Naht 0.60 -> 1.00 und der Ebenen-Anker 1.00 -> 1.45), Glaettung des
+    # Kostenfelds (1.08 -> 1.74, Fluss 0.60 -> 1.14), und Glaettung nur des Reliefs
+    # ("Massiv statt Zelle") — die macht das Gebirge sogar BILLIGER (1.08 -> 0.96), weil
+    # Mitteln die Gipfel staerker senkt als es die Luecken hebt. Die Fluss-Ader ist das
+    # staerkste gemessene Ergebnis dieses Schritts (kein Reich liess je ein Flusstal
+    # liegen); sie fuer einen schwachen Gebirgseffekt herzugeben waere ein schlechter
+    # Tausch. Wer es dennoch will, braucht eine feinere Karte, keinen groesseren Regler.
+    terrain_cost_mountain: float = 4.0  # je Einheit Relief ueber der Huegelschwelle
+    terrain_cost_water: float = 4.0     # offenes Wasser: die groesste Barriere
+    terrain_cost_desert: float = 2.2    # kein Wasser, kein Futter
+    terrain_river_bonus: float = 0.55   # das Tal ist flach und der Kahn faehrt
+    terrain_coast_bonus: float = 0.60   # Kuestenebene UND Schelf (der Saum beidseits)
 
     # --- Schichtung: Anfangs-Zusammensetzung der Bevoelkerung --------------
     # Groessen-Anteile der drei Schichten (Arbeiter/Soldat/Elite), summieren zu 1.
@@ -233,12 +297,24 @@ class Config:
     # einem modellierten Preis (Ockham: kein Wirtschafts-Solver).
     # Anteil des passenden Ueberschuss/Defizit-Minimums, der je Jahr fliesst.
     trade_rate: float = 0.25
-    # Reichweite in Grenz-Spruengen: 1 = nur direkte Nachbarn, 2 = ein Land
-    # dazwischen (Gueter transitieren). Bindet Handel an die Adjazenz, nicht an
-    # die (nur kosmetischen) Koordinaten.
-    trade_max_distance: int = 2
-    # Volumen-Daempfung je zusaetzlichem Sprung (Distanz 1 voll, 2 -> x decay).
-    trade_distance_decay: float = 0.5
+    # Reichweite als **Wege-Budget** (Schritt 3): so viel Wegekosten darf die Ware
+    # zuruecklegen. Frueher stand hier eine Sprungzahl (2 = ein Land dazwischen) — das ist
+    # jetzt der Sonderfall "zwei Kanten der offenen Ebene", denn eine Ebenen-Kante kostet
+    # genau 1.0. Dasselbe Budget waehlt auf der echten Geografie aber geografisch aus, WEN
+    # es erreicht: **vier** Kanten die Kueste entlang (4 x 0.6 = 2.4) gegen **eine**
+    # einzige ueber den Kamm (2.2) — und ueber den offenen Ozean (4.0) gar keine. Genau
+    # das ist "Handel folgt den Korridoren": nicht eine Regel, die Kuesten bevorzugt,
+    # sondern ein Budget, das an der Kueste weiter reicht.
+    # 2.5 statt 2.0, damit die vier Kuestenkanten noch hineinpassen; gemessen bringt das
+    # den Nationen im Mittel 6.8 Handelspartner (uniform: 6.2), waehrend zugleich 3.5 %
+    # ueberhaupt keinen mehr finden (uniform: 0 %) — das Netz wird nicht kleiner, es wird
+    # geografisch.
+    trade_max_cost: float = 2.5
+    # Volumen-Daempfung je Einheit Wegekosten ueber der offenen Ebene hinaus (Kosten 1.0
+    # ⇒ volles Volumen, 2.0 ⇒ die Haelfte). Damit traegt eine billige Ader mehr Ware als
+    # eine teure Kante — das ist die zweite Haelfte von "Handel folgt den Korridoren"
+    # (die erste ist, wen das Budget ueberhaupt erreicht).
+    trade_cost_decay: float = 0.5
     # favor skaliert das Volumen (Handel bevorzugt bei positivem favor):
     # scale = clamp01(base + bias*favor). Offene Feinde (hostile) handeln nicht.
     # Die Praeferenz ist bewusst mild: auch neutrale und leicht verstimmte
@@ -378,6 +454,20 @@ class Config:
 
     # --- expansion: Anspruch auf ein angrenzendes freies Feld --------------
     expand_gold_cost: float = 15.0
+    # Schritt 3: was das Gelaende in der Zielwahl wiegt. Der Beitrag ist
+    # ``-gewicht * (Wegekosten - 1)``, also am Bezugspunkt "offene Ebene" exakt 0 (und
+    # damit aus der Begruendung heraus), negativ hinter dem Kamm, POSITIV das Tal
+    # hinunter — der Korridor lockt, die Barriere haelt ab, mit einer Formel.
+    # Bei 1.0 traegt eine Ozeankante (4.0) glatte -3.0 und schlaegt damit jedes
+    # Wachstums-Motiv (die Scores liegen bei ~0.5..2): ueber den OFFENEN Ozean springt
+    # kein Reich. Die Kuestenstrasse (0.6) traegt dagegen +0.4 und laedt ein — ein Reich
+    # waechst also die Kueste entlang und ueber die Meerenge, aber nicht ins Blaue. Ein
+    # Gebirgspass (~2.2) traegt -1.2: spuerbar, aber bezahlbar, wenn Hunger oder
+    # Expansionsdrang gross genug sind. Gemessen greift beides — die Felder, die ein Reich
+    # NAHM, lagen hinter Kanten von median 0.66, die es liegen liess hinter median 4.00.
+    # Getrennt vom Kriegs-Gewicht, weil die beiden Zielmenues verschieden grosse Scores
+    # haben (Krieg reicht bis ~4).
+    expand_terrain_weight: float = 1.0
 
     # --- diplomacy: Furcht, favor-Matrix, abgeleitete Buendnisse ------------
     # Jaehrlicher Zerfall des favor Richtung 0 — die Vergebung. "Ueber
@@ -430,6 +520,12 @@ class Config:
     advantage_cap: float = 1.5
     # Gewicht der akkumulierten Grenzreibung im Kriegswunsch.
     war_friction_weight: float = 0.25
+    # Schritt 3: was das Gelaende im Kriegswunsch wiegt (siehe ``expand_terrain_weight``
+    # fuer die Form des Beitrags). Ein Angriff ueber ein Gebirge ist teurer als einer
+    # durch die offene Ebene, einer ueber die offene See kaum zu machen. Wirkt auf BEIDE
+    # Kriegsziele (Ressourcen wie Vergeltung) — was ein Heer aufhaelt, fragt nicht nach
+    # dem Motiv.
+    war_terrain_weight: float = 1.0
     # Ziel gilt als schwach, wenn seine Macht unter diesem Anteil des Angreifers liegt.
     weakness_power_ratio: float = 0.7
     weakness_bonus: float = 0.5
@@ -643,6 +739,12 @@ class MapConfig:
     Reproduzierbarkeits-Identitaet wie die von :class:`Config`: eine semantische Aenderung
     hier verlangt einen ``config_version``-Bump. (Der Worldgen baut die Geografie stets aus
     ``DEFAULT_MAP_CONFIG`` — die Karte, die man SIEHT, ist die, auf der die Welt LAEUFT.)
+
+    Der **letzte Block ist die Ausnahme** und deshalb ans Ende sortiert: Hillshading,
+    Meereis und die Farbgebung der Ansicht (ab ``sea_ice_temp``) liest ``geo`` nirgends —
+    sie faerben nur, was der Worldgen ohnehin gerechnet hat. Wer allein dort dreht, bekommt
+    eine anders AUSSEHENDE Karte und dieselbe Geschichte; das ist der einzige Teil dieser
+    Klasse ohne ``config_version``-Pflicht (gepinnt in ``test_the_view_cannot_bend_the_world``).
     """
 
     # --- Tektonik: die grosse Struktur -------------------------------------
@@ -768,23 +870,80 @@ class MapConfig:
     # unsichtbar. Der Kontrast steuert, wie weit die Helligkeit um 1.0 schwingt.
     hillshade_exaggeration: float = 7.0
     hillshade_contrast: float = 0.65
-    # Unter Wasser nur ein Hauch davon (Bathymetrie liest sich schon aus den Tiefenstufen);
-    # sonst flimmerte die glatte See.
-    hillshade_water: float = 0.35
+    # Das Wasser bekommt NICHTS davon — und das ist kein Regler, sondern eine Entscheidung
+    # (Schritt 4): eine je Zelle anders helle See ist Rauschen, kein Meer. Die Tiefe traegt
+    # allein die Stufenfolge der Wassertoene. Vorher stand hier ``hillshade_water = 0.35``
+    # und liess ~70 % der Karte flimmern.
 
-    # --- Darstellung: Politik ueber gedaempfter Natur (Schritt 5) ------------
-    # Das Kernprinzip der politischen Karte: unbeanspruchtes Land wird ENTSAETTIGT und
-    # gedaempft (es ist Landschaft, kein Anspruch), damit die kraeftigen Polity-Toene
-    # darueber leuchten. Der Helligkeits-/Saettigungskontrast ist wichtiger als die
-    # Farbwahl selbst — deshalb sind es zwei getrennte Regler. Bewusst nur ein Notch: bei
-    # zu starker Daempfung wird eine politik-arme Fruehzeit-Karte zu grauem Brei (die
-    # Erdfarben aus Schritt 4 sollen erhalten bleiben, nur zuruecktreten).
-    nature_desaturation: float = 0.42  # Anteil, um den unbeanspruchtes Land vergraut
-    nature_dim: float = 0.82           # zusaetzliche Daempfung seiner Helligkeit
-    # Beanspruchtes Land traegt die Polity-Farbe, aber das Relief scheint durch: die
-    # Hillshading-Helligkeit moduliert die Farbe zu diesem Anteil (0 = flach/kraeftig,
-    # 1 = volle Reliefschwankung). So sieht man Besitz UND Landform in derselben Zelle.
-    territory_relief: float = 0.55
+    # --- Darstellung: die aufgeraeumte Karte (Schritt 4) ---------------------
+    # Das Kernprinzip bleibt das aus Schritt 5 — Natur gedaempft, Politik dominant —, aber
+    # es scheiterte an einer Sache, die kein Regler war: die Karte hatte **keine
+    # Helligkeits-Hierarchie**. Das Auge sortiert zuerst nach Helligkeit, und die Baender
+    # ueberlappten restlos (gemessen, luma 0..255): Wasser 29..216, freies Land 83..236,
+    # Territorium 122..225. Eine freie Wueste (195) strahlte damit jedes ``pine``-Reich
+    # (122) nieder, und die Polkappe (216) war der lauteste Ort der Welt. Entsaettigen und
+    # Daempfen half nicht, weil beide MULTIPLIKATIV sind: sie verschieben das Band, sie
+    # verschmaelern es nicht — die Spanne der Biomtoene (3x) blieb erhalten.
+    #
+    # Darum zieht Schritt 4 freies Land auf EINE ruhige Zielhelligkeit statt es nur
+    # abzudunkeln. Die Hierarchie ist jetzt gebaut, nicht erhofft:
+    #   Wasser 26..86  <  freies Land ~96  <  Territorium 122..225.
+    nature_desaturation: float = 0.55  # Anteil, um den unbeanspruchtes Land vergraut
+    # Zielhelligkeit (luma) des freien Landes: JEDES Biom landet hier, egal ob Regenwald
+    # (83) oder Wueste (195). Der Ton sagt dann noch, WAS es ist; die Helligkeit sagt nur
+    # noch "frei" — und kann kein Reich mehr ueberstrahlen.
+    #
+    # Zusammen mit ``nature_relief`` ergibt der Wert das Band, in dem freies Land liegt
+    # (hier: 91..116), und das Band ist zwischen zwei Nachbarn eingeklemmt, an denen beide
+    # Zahlen geeicht sind: unten das Meer (hellste Stufe 86 — naeher heran, und ein
+    # beschatteter Wald wird zum Schelf), oben der Boden der Territorien (129 — darueber
+    # ueberstrahlt freies Land ein Reich, genau der Fehler von vorher). Mehr Abstand nach
+    # unten ist nicht zu holen: der Abstand zum Ozean laeuft gemessen gegen ~81 und haengt
+    # dann am FARBTON (Graugruen gegen Blau), nicht mehr an der Helligkeit.
+    nature_luma: float = 102.0
+    # Reliefanteil auf freiem Land: genug, dass ein Gebirge sich als Faltung abzeichnet,
+    # zu wenig, um als zweites Signal neben der Politik zu konkurrieren ("nur angedeutet").
+    nature_relief: float = 0.18
+    # Beanspruchtes Land traegt die Polity-Farbe als FLAECHE. Der Rand traegt den reinen
+    # Ton und liegt flach; das Innere sitzt auf ``territory_dim`` zurueck und laesst das
+    # Relief zu ``territory_relief`` durch. Damit ist "das Innere ist nie heller als der
+    # Rand" keine Klemme mehr, sondern faellt aus der Konstruktion (das Innere kommt
+    # rechnerisch nie ueber 0.97x des Randes).
+    #
+    # Der Reliefanteil ist gegenueber Schritt 5 fast auf ein Fuenftel herunter (0.55 ->
+    # 0.10), und das ist keine Geschmacksfrage: Schattierung SPREIZT einen Ton ueber ein
+    # Helligkeitsband, und sobald die Baender zweier Reiche sich ueberlappen, nuetzt die
+    # sauberste Farbwahl nichts mehr. Mit 0.55 lagen ein beschattetes ``iris`` und ein
+    # beleuchtetes ``text`` gemessen **47** auseinander (ihre reinen Toene: 121) — die
+    # Karte machte zwei Nachbarn wieder gleich, die die Faerbung gerade getrennt hatte.
+    # Eng geschattet bleibt der Abstand der reinen Toene ungefaehr der, den man sieht.
+    territory_relief: float = 0.10
+    territory_dim: float = 0.90
+    # Wie weit eine Glyphe sich von ihrem eigenen Grund abhebt (0 = unsichtbar, 1 = voller
+    # Kontrast). Zwei Werte, weil die beiden Glyphen verschiedene Aufgaben haben: die
+    # Biomglyphe ist Textur (sie darf nur andeuten), die Polity-Glyphe ist die Redundanz
+    # zur Farbe fuer farbschwache Augen (sie muss lesbar sein, ohne zu flirren).
+    nature_glyph_contrast: float = 0.30
+    polity_glyph_contrast: float = 0.62
+    # Fluesse in der politischen Ansicht: nur noch als Andeutung in den Grund gemischt
+    # (0 = unsichtbar, 1 = der volle Wasserton wie in der Terrain-Ansicht). Ein heller
+    # cyanfarbener Faden quer durch ein Reich war genau die Konkurrenz, die Aufgabe 3
+    # meint. Gezeichnet wird dort ausserdem nur noch der grosse Strom (``STREAM_FACTOR``),
+    # nicht jedes Rinnsal.
+    river_contrast: float = 0.45
+    # Nachbar-Polities duerfen sich nie AEHNLICH sehen (Aufgabe 5). Die gierige
+    # Graphfaerbung vermied bisher nur denselben INDEX — aber ``love #eb6f92`` und
+    # ``rose #ea9a97`` liegen nur 86 auseinander (redmean), ``gold``/``rose`` 93: zwei
+    # Nachbarn konnten also verschieden gefaerbt und trotzdem ununterscheidbar sein. Das
+    # war kein Randfall, sondern der Normalfall — gemessen ueber 30 Seeds x 250 J. trugen
+    # **27 % aller benachbarten Reichspaare** Toene unter 150, das schlechteste 86.
+    # Ab dieser Distanz gelten zwei Toene als sicher auseinanderzuhalten. Der Wert ist
+    # gemessen, nicht geschaetzt: bei 170 (zusammen mit dem Streichen von ``rose`` aus
+    # ``worldmap._POLITY_TONES``) fallen die schlechten Paare auf 0.5 % und das
+    # schlechteste ueberhaupt auf 121 — schaerfer zu stellen bringt nichts mehr, weil dann
+    # nur noch der Notfall greift. Wird kein Ton gefunden, gewinnt naemlich der
+    # entfernteste: die Faerbung schlaegt nie fehl, sie wird nur unschaerfer.
+    polity_tone_min_distance: float = 170.0
 
 
 DEFAULT_MAP_CONFIG = MapConfig()

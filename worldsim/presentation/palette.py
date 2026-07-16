@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-__all__ = ["NATURAL_EARTH", "ROSE_PINE_MOON", "Palette", "TerrainPalette"]
+__all__ = ["NATURAL_EARTH", "REALM_LEAF", "ROSE_PINE_MOON", "Palette", "TerrainPalette"]
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,24 @@ ROSE_PINE_MOON = Palette(
 )
 
 
+# Der sechste Landeston — das Gruen, das Rosé Pine nicht hat.
+#
+# Die Karte braucht sechs FLAECHENfarben, die einander und dem Meer fernbleiben; das
+# offizielle Schema liefert davon nur fuenf. Sein einziger "gruener" Akzent (``pine``) ist
+# naemlich ein Meeresblau: gemessen liegt ``#3e8fb0`` nur **24** von den Ozeanstufen
+# entfernt (redmean, siehe ``worldmap._tone_distance``) — ein pine-farbenes Reich an der
+# Kueste IST die See, und daran aendert kein Abdunkeln etwas, weil es der Farbton selbst
+# ist. Gruen ist der eine Ton, den Wasser nie annimmt, und liegt zugleich von
+# love/gold/iris/foam/text am weitesten weg: schlechtester Abstand **144** statt pine 24.
+# In Saettigung und Helligkeit (S 0.50, V 0.90) sitzt er mitten im Fenster der uebrigen
+# Akzente (love: S 0.53, V 0.92), faellt also nicht aus der Anmutung.
+#
+# Er traegt bewusst KEINE Bedeutung: die sechs Akzente oben stehen fuer Ereignisarten,
+# dieser Ton ist reine Kartografie. Darum steht er NEBEN dem Schema und nicht darin —
+# aus demselben Grund, aus dem :class:`TerrainPalette` getrennt liegt.
+REALM_LEAF = "#7ce673"
+
+
 @dataclass(frozen=True)
 class TerrainPalette:
     """Die **natuerlichen** Toene der Karte — Erde, Wasser, Vegetation.
@@ -79,13 +97,23 @@ class TerrainPalette:
     Die Toene sind so gewaehlt, dass sie auf dem dunklen Rosé-Pine-Grund lesbar liegen und
     unter der Hoehenschattierung (:func:`worldmap._hillshade`) sowohl abdunkeln als auch
     aufhellen koennen, ohne zu kippen.
+
+    **Seit Schritt 4 sind die Wassertoene FLAECHEN, keine Glyphenfarben** (die See traegt
+    kein Zeichen mehr, nur ihren Grund — siehe :mod:`worldsim.presentation.worldmap`). Ein
+    Ton, der als duenne Glyphe auf dunklem Grund gerade richtig sass, ist als flaechiger
+    Hintergrund viel zu laut: der alte Kuestensaum ``#6aa9c6`` lag bei Helligkeit 153 und
+    haette damit jeden Saum so hell gemacht wie ein ganzes Reich. Das Meer liegt darum
+    jetzt geschlossen **unter** dem Land (Helligkeit 26..86 gegen ~96 des freien Landes) —
+    daher stammt die Lesbarkeit "das ist Wasser" auf den ersten Blick.
     """
 
     # Ozean in Tiefenstufen (dunkel = tief): das gibt der Karte raeumliche Tiefe.
+    # Alle vier sind FLAECHEN und bewusst dunkler als jedes Land — die Stufen sind der
+    # einzige Kontrast, den das Meer sich leistet.
     abyss: str      # Tiefseegraben — fast schwarzblau
     deep_sea: str   # offene Tiefsee
     shelf: str      # ersoffener Kontinentalsockel / flaches Randmeer
-    coast: str      # der helle Kuestensaum
+    coast: str      # der Kuestensaum: die hellste Wasserstufe, aber immer noch Wasser
     sea_ice: str    # gefrorener Polarozean (Packeis) — die sichtbare Polkappe
     # Suesswasser (heller, kuehler als das Meer ⇒ es liest sich als anderes Wasser).
     river: str
@@ -110,15 +138,25 @@ class TerrainPalette:
 # Erdtoene, abgestimmt auf den Rosé-Pine-Grund: gedaempft genug, dass die Polity-Akzente
 # hervortreten, gesaettigt genug, dass Ozean, Wueste und Wald klar auseinanderfallen.
 NATURAL_EARTH = TerrainPalette(
-    abyss="#141d33",
-    deep_sea="#1e3a63",
-    shelf="#2f6488",
-    coast="#6aa9c6",
-    sea_ice="#cddbe6",  # blasses Eisblau-Weiss: kalt, aber vom Schnee-Weiss des Landes lesbar
+    # Das Meer: vier Stufen zwischen Helligkeit 26 und 86 — eine geschlossene, dunkle
+    # Flaeche unter allem Land. Der Abstand zwischen den Stufen traegt die Tiefe, der
+    # Abstand zum Land traegt die Aussage "hier hoert die Welt auf".
+    abyss="#131a2b",
+    deep_sea="#1a2c4a",
+    shelf="#234668",
+    coast="#2f6187",
+    # Packeis: der einzige Ton der Karte, der in eine LUECKE gezwaengt ist statt in ein Band.
+    # Er muss nach oben vom weisslichen ``text``-Reich (225) und nach unten vom freien Land
+    # (~102) wegbleiben, und beides zieht in verschiedene Richtungen. Gemessen (Abstand zum
+    # naechsten Reich / freien Land / Ozean): das alte glaenzende ``#cddbe6`` kommt einem
+    # ``text``-Reich auf 38 nahe, ein dunkles ``#6b7f96`` dem freien Polarland auf 33 —
+    # beide Extreme verschmelzen mit etwas. Bei 175 Helligkeit haelt es zu allen dreien
+    # Abstand (89 / 92 / 231) und liest sich immer noch als Eis.
+    sea_ice="#9fb3c6",
 
     river="#5aa6d0",
     stream="#93d1e8",
-    lake="#3d7ba8",
+    lake="#2f6f9b",  # Suesswasser: eine Spur heller und kuehler als das Randmeer
     rainforest="#2f6b39",
     forest="#4c8a48",
     taiga="#3d7d64",

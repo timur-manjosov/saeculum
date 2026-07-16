@@ -37,7 +37,7 @@ from worldsim.models import World
 from worldsim.presentation.components import balken, feed_tafel
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.render import Steuerung, _pump, _snapshot_years
-from worldsim.presentation.worldmap import render_map
+from worldsim.presentation.worldmap import POLITICAL_VIEW, render_map
 from worldsim.rng import Rng
 from worldsim.systems import bevoelkerung
 
@@ -114,6 +114,7 @@ def _header(world: World, *, year: int, max_year: int, paused: bool, tempo: floa
         (status, P.gold),
         (f"    polities {len(world.polities)}", P.pine),
         (f"    people {people:,}", P.foam),
+        ("    m: map", P.muted),
     )
 
 
@@ -133,6 +134,7 @@ def _frame(
     tempo: float,
     show_map: bool,
     flash: frozenset[int] = frozenset(),
+    view: str = POLITICAL_VIEW,
 ) -> RenderableType:
     """Setze einen vollstaendigen Frame zusammen (Kopf, Karte, Top-Polities, Feed)."""
     body: list[RenderableType] = [
@@ -141,8 +143,8 @@ def _frame(
     if show_map:
         # Die Karte liest den **aktuellen** Besitzstand ⇒ Grenzen wandern Jahr fuer Jahr.
         # ``flash`` sind die in DIESEM Jahr gewechselten Regionen: sie blitzen kurz auf,
-        # damit man die Veraenderung bemerkt (Aufgabe 6).
-        body.append(render_map(world, seed=seed, flash=flash))
+        # damit man die Veraenderung bemerkt.
+        body.append(render_map(world, seed=seed, flash=flash, view=view))
     body.append(
         Panel(
             _polity_tafel(world),
@@ -185,10 +187,11 @@ def watch(
 
     def frame(
         world: World, *, year: int, paused: bool, tempo: float,
-        flash: frozenset[int] = frozenset(),
+        flash: frozenset[int] = frozenset(), view: str = POLITICAL_VIEW,
     ) -> RenderableType:
         return _frame(world, feed, seed=seed, year=year, max_year=max_year,
-                      paused=paused, tempo=tempo, show_map=show_map, flash=flash)
+                      paused=paused, tempo=tempo, show_map=show_map, flash=flash,
+                      view=view)
 
     # Der Besitzstand des Vorjahres, um die in diesem Jahr gewechselten Regionen (Aufgabe
     # 6) aufblitzen zu lassen. ``None`` beim ersten Frame ⇒ dort blitzt nichts.
@@ -228,7 +231,7 @@ def watch(
             ingest(world, log)
             live.update(
                 frame(world, year=world.year, paused=ctrl.paused,
-                      tempo=speed * ctrl.speed, flash=changed(world))
+                      tempo=speed * ctrl.speed, flash=changed(world), view=ctrl.view)
             )
             _pump(ctrl, base_delay / ctrl.speed)
 

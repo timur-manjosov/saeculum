@@ -117,6 +117,20 @@ def test_soldiers_track_the_target_share() -> None:
     ``target_soldier_fraction`` zu pruefen, hiesse gegen die falsche Zahl zu pruefen.
     Ausgenommen sind Nationen im Nachklang einer Entladung: der Bankrott entlaesst das
     Heer mit ABSICHT (Aenderung 6), die Rekrutierung holt das ueber Jahre wieder auf.
+
+    Ausgenommen sind ferner die **hungernden** Nationen, und zwar weil ``demografie`` bei
+    ``food_deficit > 0`` nach ``_starve`` abbricht (``continue``) und ``_recruit`` damit
+    gar nicht erst laeuft: wer hungert, ruehrt sein Heer nicht an — in keine Richtung.
+    Eine malthusianisch an ihrer Decke sitzende Nation hungert dauerhaft ein wenig und
+    friert ihren Soldatenanteil darum auf Jahrzehnte ein (in einer Zwischeneichung von
+    Schritt 3 stand eine solche Nation 28 Jahre unbewegt bei 0.045 gegen ein Ziel von
+    0.10). Gegen sie die Homoeostase zu pruefen, hiesse einen Regler zu pruefen, der
+    abgeklemmt ist.
+
+    Das ist AELTER als Schritt 3 und unabhaengig davon (gemessen ueber 12 Seeds x 120
+    Jahre: 14.2 % der Nationen enden im Defizit ohne Terrain-Kosten, 15.9 % mit ihnen) —
+    dieser Test ist bisher nur an keine solche Nation geraten. Die Ausnahme steht hier,
+    damit er nicht weiter von diesem Glueck lebt.
     """
     world, _ = simulate(seed=42, years=120)
     cfg = Config()
@@ -125,6 +139,8 @@ def test_soldiers_track_the_target_share() -> None:
         total = sum(s.size for s in pol.strata)
         if total <= 0 or world.year - pol.last_crisis < cfg.crisis_cooldown_years:
             continue
+        if pol.food_deficit > 0.0:
+            continue  # hungernd ⇒ ``_recruit`` laeuft nicht (s. Docstring)
         target = cfg.target_soldier_fraction
         if pol.goal is GoalKind.UEBERLEBEN:
             target *= cfg.retrench_soldier_fraction

@@ -136,6 +136,51 @@ def _scaled_strata(strata: tuple[Stratum, ...], factor: float) -> tuple[Stratum,
     return tuple(replace(s, size=max(0.0, s.size * factor)) for s in strata)
 
 
+# === Wegekosten: das Terrain als Barriere und Korridor (Schritt 3) ==========
+# Die drei Leser (Expansion, Handel, Konflikt) fragen die Geografie nur ueber diese
+# beiden Funktionen. Sie ist eine feste Eigenschaft der Welt (``geo.derive``, einmal je
+# Welt gebaut) — hier wird nichts vermessen und nichts gesucht, nur nachgeschlagen.
+
+def wegekosten(world: World, a: EntityId, b: EntityId) -> float:
+    """Preis der Grenzkante a—b (fehlender Eintrag = offene Ebene = 1.0).
+
+    Der neutrale Default ist der Angelpunkt der ganzen Aenderung: eine Welt ohne
+    hinterlegte Kosten verhaelt sich exakt wie vor Schritt 3.
+    """
+    return world.regions[a].wegekosten.get(b, 1.0)
+
+
+def _approach_cost(world: World, pol: Polity, region: EntityId) -> float:
+    """Billigster Zugang zu ``region`` von ``pol``s Territorium aus (1.0, falls keiner).
+
+    Das Reich greift dort zu, wo es am naechsten dran ist — also gilt der Preis seiner
+    guenstigsten Grenzkante zu dem Feld, nicht der einer beliebigen. Nur ueber
+    ``nachbarn`` iteriert (stabile Reihenfolge; das Minimum ist ohnehin ordnungsfrei).
+    """
+    prices = [
+        wegekosten(world, rid, region)
+        for rid in sorted(pol.territory)
+        if region in world.regions[rid].nachbarn
+    ]
+    return min(prices) if prices else 1.0
+
+
+def _border_cost(world: World, x: EntityId, y: EntityId) -> float:
+    """Preis der billigsten Naht zwischen den Territorien zweier Nationen (1.0 = keine).
+
+    Das Terrain, das ein Heer ueberwinden MUSS: der guenstigste Uebergang irgendwo an
+    der gemeinsamen Grenze — der Pass, die Furt, die Meerenge.
+    """
+    foreign = set(world.polities[y].territory)
+    prices = [
+        wegekosten(world, rid, nb)
+        for rid in sorted(world.polities[x].territory)
+        for nb in world.regions[rid].nachbarn
+        if nb in foreign
+    ]
+    return min(prices) if prices else 1.0
+
+
 # === Beziehungs-Matrix: favor-Helfer & abgeleitete Status ===================
 
 def favor(world: World, a: EntityId, b: EntityId) -> float:
@@ -350,11 +395,14 @@ def trade(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
 
     Rein und deterministisch, **ohne** RNG: fuer jede der drei Ressourcen fliesst
     Ueberschuss (Bestand ueber dem Bedarf) zu Defizit (Bestand unter dem Bedarf)
-    entlang der Grenz-Kanten des Adjazenzgraphen (bis ``trade_max_distance``
-    Spruenge, mit Distanz-Daempfung). Der Fluss ist reine **Umverteilung** — je
-    Ressource bleibt die Weltsumme erhalten (keine Erzeugung aus dem Nichts).
-    ``favor`` steuert die Praeferenz (offene Feinde handeln nicht, Freunde mehr);
-    keine Nation gibt unter ihren eigenen Bedarf ab, keine nimmt ueber ihn hinaus.
+    entlang der Grenz-Kanten des Adjazenzgraphen — so weit das Wege-Budget
+    (``trade_max_cost``) traegt, mit Daempfung nach dem Preis des Weges. Seit Schritt 3
+    ist dieser Preis geografisch: die Ware faehrt den Fluss hinunter und die Kueste
+    entlang, sie quert das Gebirge nur muehsam und den offenen Ozean nie. Der Fluss ist
+    reine **Umverteilung** — je Ressource bleibt die Weltsumme erhalten (keine Erzeugung
+    aus dem Nichts). ``favor`` steuert die Praeferenz (offene Feinde handeln nicht,
+    Freunde mehr); keine Nation gibt unter ihren eigenen Bedarf ab, keine nimmt ueber
+    ihn hinaus.
 
     Der Handel laeuft direkt nach der Produktion: importiertes Getreide kann noch
     dieselbe Hungersnot abwenden, importiertes Eisen/Gold hebt noch dieses Jahr die
@@ -411,37 +459,48 @@ def trade(world: World, rng: Stream, cfg: Config, log: EventLog) -> World:
 
 def _trade_distances(
     world: World, pids: list[EntityId], cfg: Config
-) -> dict[tuple[EntityId, EntityId], int]:
-    """Grenz-Sprung-Distanz zwischen Territorien (nur Paare <= ``trade_max_distance``).
+) -> dict[tuple[EntityId, EntityId], float]:
+    """Preis des billigsten Handelsweges zwischen Territorien (nur Paare im Budget).
 
-    Multi-Source-BFS ueber den Regionsgraphen von jedem Territorium aus: direkte
-    Nachbarn liegen bei Distanz 1, ein Land dazwischen bei 2 (Gueter transitieren).
-    Rein aus der Adjazenz — die Koordinaten bleiben kosmetisch. Distanz ist
-    symmetrisch; je gerichtetem Paar gespeichert fuer den direkten Zugriff.
+    Schritt 3: dieselbe Ausbreitung ueber die Grenzkanten wie bisher, aber sie zaehlt
+    nicht mehr **Spruenge**, sondern summiert **Wegekosten** — und ``trade_max_cost``
+    ist das Budget, das die Sprungzahl ersetzt. Auf einer Welt aus lauter 1.0-Kanten ist
+    beides exakt dasselbe: die alte Sprung-Distanz ist der Sonderfall, in dem jeder
+    Nachbar gleich weit weg ist. Auf der echten Geografie faellt daraus von selbst, was
+    das Ziel verlangt: den Fluss hinunter und die Kueste entlang reicht das Budget weit
+    (vier billige Kanten statt zwei teurer), ueber den Kamm gerade noch, ueber den
+    offenen Ozean gar nicht. Kuestennationen handeln viel, Binnenlaender sind isoliert —
+    nicht weil eine Regel das sagt, sondern weil ihre Kanten teuer sind.
+
+    Die Ausbreitung **relaxiert** (ein billigerer Weg ueberschreibt einen schon
+    gefundenen), denn der kuerzeste Weg ist nicht mehr der billigste. Das ist trotzdem
+    keine Wegsuche (Ockham): es entsteht keine Route, kein Plan, kein Gedaechtnis — nur
+    die eine Zahl "was kostet es von hier nach dort". Die Kantenpreise, die sie
+    aufsummiert, stehen seit dem Worldgen fest; hier wird nichts vermessen.
     """
-    max_d = cfg.trade_max_distance
-    dist: dict[tuple[EntityId, EntityId], int] = {}
+    budget = cfg.trade_max_cost
+    dist: dict[tuple[EntityId, EntityId], float] = {}
     for a in pids:
         territory = world.polities[a].territory
-        hops: dict[EntityId, int] = {rid: 0 for rid in territory}
-        reached: dict[EntityId, int] = {}
+        cost: dict[EntityId, float] = dict.fromkeys(territory, 0.0)
         frontier = sorted(territory)
-        d = 0
-        while frontier and d < max_d:
-            d += 1
-            nxt: list[EntityId] = []
+        while frontier:
+            nxt: set[EntityId] = set()
             for rid in frontier:
                 for nb in world.regions[rid].nachbarn:
-                    if nb in hops:
+                    price = cost[rid] + wegekosten(world, rid, nb)
+                    if price > budget or price >= cost.get(nb, float("inf")):
                         continue
-                    hops[nb] = d
-                    nxt.append(nb)
-                    owner = world.regions[nb].owner
-                    if owner is not None and owner != a and owner not in reached:
-                        reached[owner] = d
-            frontier = sorted(nxt)
-        for b, hd in reached.items():
-            dist[(a, b)] = hd
+                    cost[nb] = price
+                    nxt.add(nb)
+            frontier = sorted(nxt)  # nie ueber die Set-Reihenfolge iterieren
+        # Eine fremde Nation ist zum Preis ihres billigsten erreichten Feldes erreichbar.
+        for rid in sorted(cost):
+            owner = world.regions[rid].owner
+            if owner is None or owner == a:
+                continue
+            if cost[rid] < dist.get((a, owner), float("inf")):
+                dist[(a, owner)] = cost[rid]
     return dist
 
 
@@ -465,7 +524,7 @@ def _trade_partners(
     world: World,
     a: EntityId,
     pids: list[EntityId],
-    dist: dict[tuple[EntityId, EntityId], int],
+    dist: dict[tuple[EntityId, EntityId], float],
     cfg: Config,
 ) -> list[EntityId]:
     """Handelspartner von a in Reichweite, nach Praeferenz sortiert (Determinismus).
@@ -482,10 +541,16 @@ def _trade_partners(
 
 
 def _trade_volume_scale(
-    world: World, a: EntityId, b: EntityId, hops: int, cfg: Config
+    world: World, a: EntityId, b: EntityId, route_cost: float, cfg: Config
 ) -> float:
-    """Volumen-Faktor der Kante a -> b: Distanz-Daempfung mal favor-Praeferenz (0..1)."""
-    decay = cfg.trade_distance_decay ** (hops - 1)
+    """Volumen-Faktor der Kante a -> b: Wege-Daempfung mal favor-Praeferenz.
+
+    Schritt 3: gedaempft wird nach dem PREIS des Weges, nicht nach seiner Sprungzahl —
+    bezogen auf die offene Ebene (Kosten 1.0 ⇒ Daempfung 1.0, wie der alte direkte
+    Nachbar). Ein teurer Weg traegt weniger Ware, ein billiger mehr: so wird der Fluss
+    zur Handelsader, ohne dass ihn jemand dazu erklaert.
+    """
+    decay = cfg.trade_cost_decay ** (route_cost - 1.0)
     preference = _clamp01(cfg.trade_favor_base + cfg.trade_favor_bias * favor(world, a, b))
     return decay * preference
 
@@ -1557,7 +1622,15 @@ def _score_ueberleben(world: World, pid: EntityId, cfg: Config) -> _GoalChoice:
 
 
 def _score_wachsen(world: World, pid: EntityId, cfg: Config) -> _GoalChoice | None:
-    """Ein freies Nachbarfeld beanspruchen — erfuellbar nur mit Land und Gold."""
+    """Ein freies Nachbarfeld beanspruchen — erfuellbar nur mit Land und Gold.
+
+    Schritt 3: das Gelaende redet mit. ``Wegekosten`` traegt den Preis des Zugriffs
+    gegenueber der offenen Ebene — negativ hinter dem Kamm oder ueber der See, positiv
+    das Tal hinunter. Deshalb steht ein Reich am Gebirge still: nicht weil eine Regel es
+    anhaelt, sondern weil das Ziel WACHSEN dort seinen Wettstreit gegen UEBERLEBEN
+    verliert. Wer genug Hunger oder Expansionsdrang hat, geht trotzdem hinueber — die
+    Barriere ist ein Preis, kein Verbot.
+    """
     pol = world.polities[pid]
     affordable = pol.stocks.gold - cfg.expand_gold_cost
     if affordable < 0.0:
@@ -1573,6 +1646,10 @@ def _score_wachsen(world: World, pid: EntityId, cfg: Config) -> _GoalChoice | No
     decision.add(FactorLabel.EXPANSIONSDRANG, et.expansion)
     decision.add(FactorLabel.NAHRUNGSUEBERSCHUSS, surplus)
     decision.add(FactorLabel.WOHLSTAND, min(affordable / cfg.expand_gold_cost, 1.0))
+    decision.add(
+        FactorLabel.WEGEKOSTEN,
+        -cfg.expand_terrain_weight * (_approach_cost(world, pol, target) - 1.0),
+    )
     decision.add(FactorLabel.VORSICHT, -et.caution * 0.5)
     return _GoalChoice(GoalKind.WACHSEN, decision, target)
 
@@ -1638,10 +1715,28 @@ def _score_ressource_sichern(
         decision.add(FactorLabel.AUSSENDRUCK, crisis)
         decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
         decision.add(FactorLabel.MILITAERVORTEIL, _advantage(world, pid, y, powers, cfg))
+        decision.add(FactorLabel.WEGEKOSTEN, _terrain_toll(world, pid, y, cfg))
         decision.add(FactorLabel.FURCHT, -pol.fear.get(y, 0.0))
         decision.add(FactorLabel.VORSICHT, -et.caution)
         best = _better_target(best, _GoalChoice(GoalKind.RESSOURCE_SICHERN, decision, y))
     return best
+
+
+def _terrain_toll(world: World, x: EntityId, y: EntityId, cfg: Config) -> float:
+    """Was das Gelaende zum Kriegswunsch beitraegt: der Preis des Anmarschs (Schritt 3).
+
+    Ein Angriff ueber das Gebirge ist teurer als einer durch die offene Ebene, und einer
+    ueber die See kaum zu machen — also zieht das Gelaende die Utility beider Kriegsziele
+    genau um diesen Aufschlag herunter. Bezug ist die offene Ebene: dort ist der Beitrag
+    exakt 0 und faellt aus der Begruendung (das Gelaende hat nichts entschieden). Ueber
+    eine billige Kueste hinweg ist er sogar leicht positiv — der Korridor lockt das Heer
+    genauso wie den Haendler.
+
+    Ein Verbot ist das nicht: ein Reich mit genug Not, Groll oder Uebermacht bezahlt den
+    Aufschlag und geht trotzdem. Die Grenze am Kamm ist die FOLGE davon, dass es sich
+    meistens nicht lohnt — kein Gesetz, das sie dorthin legt.
+    """
+    return -cfg.war_terrain_weight * (_border_cost(world, x, y) - 1.0)
 
 
 def _krisendruck(pol: Polity, year: int, cfg: Config) -> float:
@@ -1722,6 +1817,8 @@ def _score_groll_vergelten(
         decision.add(FactorLabel.AUSSENDRUCK, crisis)
         decision.add(FactorLabel.ZIEL_SCHWAECHE, weakness, causes=weakness_causes)
         decision.add(FactorLabel.MILITAERVORTEIL, _advantage(world, pid, y, powers, cfg))
+        # Schritt 3: auch die alte Rechnung wird ueber einen Kamm hinweg teurer beglichen.
+        decision.add(FactorLabel.WEGEKOSTEN, _terrain_toll(world, pid, y, cfg))
         decision.add(FactorLabel.FURCHT, -pol.fear.get(y, 0.0))
         decision.add(FactorLabel.VORSICHT, -et.caution)
         best = _better_target(best, _GoalChoice(GoalKind.GROLL_VERGELTEN, decision, y))
@@ -3295,7 +3392,14 @@ def _bordering_nations(world: World, pol: Polity) -> list[EntityId]:
 
 
 def _free_neighbor(world: World, pol: Polity) -> EntityId | None:
-    """Bestes freies Nachbarfeld: hoechste Nahrungskapazitaet, Gleichstand: kleinste id."""
+    """Bestes freies Nachbarfeld: hoechster Ertrag JE WEGEKOSTEN; Gleichstand: kleinste id.
+
+    Schritt 3: nicht mehr die fetteste Weide gewinnt, sondern die beste, die man auch
+    erreicht. Das fruchtbare Tal nebenan schlaegt die etwas fruchtbarere Hochebene
+    jenseits des Kamms — und darum waechst ein Reich das Tal hinunter und die Kueste
+    entlang, bis ihm das billige Land ausgeht. Dieselbe Regel wie beim Eroberungsziel
+    (``_contested_region``): Ertrag gegen Preis, sonst nichts.
+    """
     candidates: set[EntityId] = set()
     for region_id in pol.territory:
         for neighbor in world.regions[region_id].nachbarn:
@@ -3305,12 +3409,20 @@ def _free_neighbor(world: World, pol: Polity) -> EntityId | None:
         return None
     return max(
         sorted(candidates),
-        key=lambda rid: (world.regions[rid].food_capacity, -rid),
+        key=lambda rid: (
+            world.regions[rid].food_capacity / _approach_cost(world, pol, rid),
+            -rid,
+        ),
     )
 
 
 def _contested_region(world: World, winner: EntityId, loser: EntityId) -> EntityId | None:
-    """Eine nicht-Hauptstadt-Region des Verlierers an der Grenze zum Sieger."""
+    """Eine nicht-Hauptstadt-Region des Verlierers an der Grenze zum Sieger.
+
+    Welche faellt, entscheidet seit Schritt 3 der Ertrag JE WEGEKOSTEN — dieselbe Regel
+    wie bei der friedlichen Ausdehnung (``_free_neighbor``). Das Heer nimmt die Provinz
+    im Tal, nicht die etwas reichere hinter dem Kamm.
+    """
     pw = world.polities[winner]
     pl = world.polities[loser]
     winner_fields = set(pw.territory)
@@ -3322,7 +3434,13 @@ def _contested_region(world: World, winner: EntityId, loser: EntityId) -> Entity
             candidates.append(rid)
     if not candidates:
         return None
-    return max(candidates, key=lambda rid: (world.regions[rid].food_capacity, -rid))
+    return max(
+        candidates,
+        key=lambda rid: (
+            world.regions[rid].food_capacity / _approach_cost(world, pw, rid),
+            -rid,
+        ),
+    )
 
 
 def _clamp(value: float, low: float = -1.0, high: float = 1.0) -> float:

@@ -68,8 +68,19 @@ def test_grain_shortage_drives_famine() -> None:
 
     Aenderung 7: der Mangel wird nicht mehr gewuerfelt (die Ernteschwankung ist fort).
     Karges Land traegt die Anfangsbevoelkerung schlicht nicht — Malthus, kein Wetter.
+
+    Karg heisst dabei auch ohne ``capital_min_capacity``. Der Boden (Schritt 2) sichert der
+    Wiege ausdruecklich zu, dass sie die Anfangsbevoelkerung ernaehren KANN — er ist damit
+    die woertliche Verneinung dessen, was hier behauptet wird, und liess diesen Test seine
+    eigene Zusage nie pruefen: mit Boden hungerte die karge Welt erst ab Jahr 20 bis 94,
+    naemlich sobald ein Krieg einer Nation Land abnahm. Gemessen wurde also Hunger aus
+    GEBIETSVERLUST, und der haengt an der Kriegshaeufigkeit — entsprechend fiel der Test
+    aus, als eine Zwischeneichung von Schritt 3 sie senkte. Ohne Boden traegt das Land die
+    200 Koepfe schlicht nicht: jeder Seed hungert ab Jahr 0, ganz ohne Krieg.
     """
-    barren = Config(fertility_capacity_scale=0.2, initial_getreide=0.0)
+    barren = Config(
+        fertility_capacity_scale=0.2, initial_getreide=0.0, capital_min_capacity=0.0
+    )
     _, log = simulate(seed=5, years=120, cfg=barren)
     famines = [e for e in log if e.kind == EventKind.HUNGERSNOT]
     assert famines

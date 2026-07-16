@@ -264,6 +264,13 @@ class Region:
     strain: float = 0.0
     # Adjazenz/Distanz fuer Handel & Krieg = Grenzen.
     nachbarn: tuple[EntityId, ...] = ()
+    # Schritt 3: was die Grenzkante zu jedem Nachbarn KOSTET — Terrain als Barriere und
+    # Korridor (aus ``geo.derive``: Gebirge/offenes Wasser/Wueste teuer, Fluss/Kueste
+    # billig). 1.0 ist die offene Ebene; ein fehlender Eintrag gilt als genau das. Damit
+    # ist die Nachbarschaft nicht mehr uniform: ``nachbarn`` sagt, WOHIN man kann,
+    # ``wegekosten`` sagt, zu welchem Preis. Nur per ``.get`` gelesen, nie iteriert —
+    # die Reihenfolge im Entscheidungspfad gibt allein ``nachbarn`` (Determinismus).
+    wegekosten: dict[EntityId, float] = field(default_factory=dict)
     owner: EntityId | None = None
     # Rein geografische Lage in [0,1)^2 fuer die Karten-Darstellung (aus dem
     # worldgen-Sub-Strom, Teil des Determinismus-Vertrags). Die Simulation liest

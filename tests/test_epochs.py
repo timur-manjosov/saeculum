@@ -136,8 +136,15 @@ def test_causal_enabling_statement_links_shock_to_power_shift() -> None:
     einer Gesteinsspannung gewichen, die Jahrhunderte braucht). Dass ein Beben ausgerechnet
     kurz vor einem Machtwechsel zuschlaegt, ist damit ein seltener Zufall der Geografie —
     ein Test an einem einzigen Seed wuerde nur Glueck messen.
+
+    Gesucht wird darum in einem VORRAT statt in einer Handvoll gepflueckter Seeds: das
+    Zusammentreffen traegt gemessen jeder vierte Seed, drei feste sind also eine Muenze
+    (in 42 % der Faelle traefe keiner). Genau das fiel bei Schritt 3 auf — die drei alten
+    (7, 99, 5) hoerten auf zu treffen, als sich die Kriegshaeufigkeit leicht verschob, und
+    treffen inzwischen wieder. Ein Test, den eine Eichung um wenige Prozent kippt, misst
+    sein eigenes Glueck und nicht die Zusage.
     """
-    for seed in (7, 99, 5):
+    for seed in range(16):
         world, log = simulate(seed=seed, years=250)
         enabled = [
             e

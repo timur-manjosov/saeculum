@@ -163,9 +163,12 @@ def test_trade_needs_a_friendly_open_border() -> None:
     """Handel folgt der Adjazenz und meidet offene Feinde.
 
     X hat Getreide-Ueberschuss; Y (Nachbar, neutral) wird beliefert, Z (Nachbar,
-    verfeindet) nicht, W (ausser Reichweite bei ``trade_max_distance=1``) nicht.
+    verfeindet) nicht, W (ausser Reichweite bei einem Budget von genau einer Kante) nicht.
+
+    Die Welt traegt keine ``wegekosten``, jede Kante gilt also als offene Ebene (1.0) —
+    ``trade_max_cost=1.0`` ist damit exakt die alte Reichweite "ein Sprung".
     """
-    cfg = Config(trade_max_distance=1)
+    cfg = Config(trade_max_cost=1.0)
     world = _star_world(hostile_z=True)
     _run_trade(world, cfg)
     assert world.polities[Y].stocks.getreide > 0.0  # neutraler Nachbar: beliefert

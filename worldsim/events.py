@@ -134,6 +134,13 @@ class FactorLabel(StrEnum):
     BEUTE = "Beute"
     # Aenderung 5: Handel und Abhaengigkeit (Krieg aus Handelsverflechtung).
     HANDELSABHAENGIGKEIT = "Handelsabhaengigkeit"
+    # Schritt 3: das Terrain als Barriere UND Korridor. Der Preis des Weges dorthin,
+    # gemessen gegen die offene Ebene: negativ ueber den Kamm, durch die Wueste, ueber
+    # die See — positiv den Fluss hinunter und die Kueste entlang. Auf der Ebene selbst
+    # exakt 0, faellt also aus der Begruendung heraus. Steht dieser Faktor in der
+    # Faktorliste eines Krieges oder einer Expansion, dann hat die Geografie mitgeredet;
+    # sein Vorzeichen sagt, ob sie abgehalten oder gelockt hat.
+    WEGEKOSTEN = "Wegekosten"
     # Aenderung 6: die vier Komponenten des Spannungszustands. Ihre Summe IST die
     # Spannung, ihre groesste waehlt die Art der Entladung — die Faktorliste einer
     # Entladung ist exakt diese Rechnung (Strukturell-Demografische Theorie).

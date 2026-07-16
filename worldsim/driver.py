@@ -162,6 +162,8 @@ def worldgen(master: Rng, cfg: Config) -> World:
             iron_rich=geo.iron_rich[rid],
             gold_rich=geo.gold_rich[rid],
             nachbarn=geo.adjacency[rid],
+            # Schritt 3: der Preis jeder Grenzkante, aus dem Terrain der Naht.
+            wegekosten=dict(zip(geo.adjacency[rid], geo.edge_cost[rid], strict=True)),
             coord=geo.coords[rid],
         )
     # Die Verwerfungen bleiben eine gezogene Anfangsbedingung (Erdbeben-Geologie).

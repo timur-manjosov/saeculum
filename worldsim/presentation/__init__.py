@@ -52,10 +52,18 @@ from worldsim.presentation.visual import (
     visuelle_historie,
 )
 from worldsim.presentation.watch import watch, weltlauf
-from worldsim.presentation.worldmap import render_map
+from worldsim.presentation.worldmap import (
+    MAP_VIEWS,
+    POLITICAL_VIEW,
+    TERRAIN_VIEW,
+    render_map,
+)
 
 __all__ = [
+    "MAP_VIEWS",
+    "POLITICAL_VIEW",
     "ROSE_PINE_MOON",
+    "TERRAIN_VIEW",
     "Biome",
     "Climate",
     "Hydrology",

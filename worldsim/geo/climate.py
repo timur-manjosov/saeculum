@@ -20,7 +20,9 @@ Die Kette
 
 Was das Modul NICHT tut: eine Zirkulation simulieren, Jahreszeiten kennen, Zeit haben.
 Es ist ein Standbild wie die Tektonik — einmal je Welt gebaut (gecacht), nie pro Tick.
-Read-only ueber der Simulation; der Zufall kommt aus dem **kosmetischen** Sub-Strom.
+Read-only ueber der Simulation; der Zufall kommt aus dem **kosmetischen** Sub-Strom (siehe
+den Zufalls-Vertrag in :mod:`worldsim.geo.terrain`: der Namensraum ist isoliert, das
+ERGEBNIS ist seit Schritt 2 kanonisch).
 """
 
 from __future__ import annotations
@@ -165,8 +167,10 @@ def build_climate(
 
     Reine Funktion von ``(seed, width, height, cfg)`` und gecacht: sie laeuft **einmal**
     je Welt, nie pro Tick. Der Zufall (nur die Temperatur-Unregelmaessigkeit) kommt aus
-    dem **kosmetischen** Sub-Strom ``"climate"`` — das Klima kann die Historie nicht
-    verbiegen.
+    dem **kosmetischen** Sub-Strom ``"climate"``. Das heisst seit Schritt 2 nicht mehr,
+    dass das Klima folgenlos waere — es speist ueber Biom und Feuchte die Tragfaehigkeit
+    und die Wegekosten —, sondern nur, dass sein AUFBAU den semantischen Strom nicht
+    beruehrt: das Klima zu bauen verschiebt keinen Zug.
     """
     terrain = build_terrain(seed, width, height, cfg)
     gen = Rng(seed).cosmetic_stream("climate")

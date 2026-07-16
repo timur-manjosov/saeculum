@@ -32,11 +32,17 @@ aufeinander zulaufen. Darum wird die Hoehe hier nicht gewuerfelt, sondern *herge
 
 Zufalls-Vertrag
 ---------------
-Die Karte ist **kosmetisch**: sie aendert nie, welche Fakten die Simulation erzeugt.
-Entsprechend zieht sie aus dem **kosmetischen** Namensraum
-(:meth:`Rng.cosmetic_stream`), der den semantischen Strom per Konstruktion nicht
-beruehren kann — an der Tektonik zu drehen kann eine Historie nicht verbiegen.
-Der Aufbau laeuft **einmal** je Welt (gecacht), nie pro Tick.
+Seit Schritt 2 ist diese Karte **kanonisch**, nicht kosmetisch: die Simulation laeuft AUF
+ihr (der Worldgen leitet Tragfaehigkeit, Erze und — seit Schritt 3 — die Wegekosten aus ihr
+ab, siehe :mod:`worldsim.geo.derive`). An der Tektonik zu drehen aendert also sehr wohl die
+Historie; ``MapConfig`` gehoert darum zur Lauf-Identitaet.
+
+Was bleibt, ist die Isolation des ZIEHENS: ``build_terrain`` ist eine reine Funktion des
+Seeds und zieht aus dem **kosmetischen** Namensraum (:meth:`Rng.cosmetic_stream`), der den
+semantischen Strom per Konstruktion nicht beruehren kann. Die Karte fuer die Anzeige zu
+bauen verschiebt darum keinen einzigen semantischen Zug — dieselbe Geografie speist die
+Historie, aber sie zu ZEICHNEN kann sie nicht biegen. Der Aufbau laeuft **einmal** je Welt
+(gecacht), nie pro Tick.
 """
 
 from __future__ import annotations
@@ -83,9 +89,10 @@ TRENCH_RELIEF = -0.55  # darunter: unter die eigene Kruste gerissen ⇒ Tiefseeg
 # sondern die untere Grenze, ab der die Geologie noch traegt: sie muss die Pole flaechen-
 # treu aufloesen (Klima), zusammenhaengende Gebirgsketten zulassen (Tektonik) und darf die
 # Einzugsgebiete nicht so vergroessern, dass die Karte in Fluessen ersaeuft (Hydrologie).
-# Wer hier dreht, aendert nur die ANSICHT (die Karte ist kosmetisch); die Flussdichte
-# muss dann ueber ``MapConfig.river_threshold`` nachgezogen werden (skaliert mit der
-# Einzugsflaeche, also mit der Zellzahl).
+# Wer hier dreht, aendert seit Schritt 2 nicht nur die Ansicht, sondern die WELT (die
+# Simulation laeuft auf dieser Geografie); die Flussdichte muss dann ueber
+# ``MapConfig.river_threshold`` nachgezogen werden (skaliert mit der Einzugsflaeche, also
+# mit der Zellzahl).
 MAP_WIDTH = 68   # Kartenbreite in Zeichen
 MAP_HEIGHT = 17  # Kartenhoehe in Zeilen
 
@@ -397,7 +404,8 @@ def build_terrain(
 
     Reine Funktion von ``(seed, width, height, cfg)`` und gecacht: sie laeuft
     **einmal** je Welt, nie pro Tick. Der Zufall kommt aus dem **kosmetischen**
-    Sub-Strom ``"terrain"`` — die Karte kann den semantischen Pfad nicht beruehren.
+    Sub-Strom ``"terrain"`` — sie zieht also keinen Master-RNG und mutiert nichts (siehe
+    den Zufalls-Vertrag oben: das Ergebnis ist kanonisch, das Bauen ist folgenlos).
     """
     gen = Rng(seed).cosmetic_stream("terrain")
     plates = _scatter_plates(gen, cfg)
