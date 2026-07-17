@@ -37,10 +37,20 @@ __all__ = [
     "faktoren_text",
     "feed_tafel",
     "kausal_zeile",
+    "tasten_zeile",
     "zeitalter_regel",
 ]
 
 _BAR_WIDTH = 9  # Standardbreite der kompakten Kennwert-Balken
+
+# Die Steuertasten der bewegten Ansichten — genau die, die ``render.Steuerung`` kennt.
+_TASTEN: tuple[tuple[str, str], ...] = (
+    ("space", "pause"),
+    ("n", "step"),
+    ("+/-", "speed"),
+    ("m", "map"),
+    ("q", "quit"),
+)
 
 
 def balken(value: float, maximum: float, *, color: str, width: int = _BAR_WIDTH) -> Text:
@@ -131,6 +141,22 @@ def feed_tafel(feed: deque[tuple[EventKind, str]], *, title: str = "recent event
     if not feed:
         text.append("…", style=P.muted)
     return Panel(text, title=title, title_align="left", border_style=P.muted)
+
+
+def tasten_zeile() -> Text:
+    """Die dezente Tastenleiste der bewegten Ansichten (Beobachtung ist der Primaermodus).
+
+    Derselbe Baustein steht unter der Live-Ansicht (``watch``) und dem Zeitraffer
+    (``replay``) — beide hoeren auf dieselbe ``Steuerung``, also zeigen beide
+    dieselben Tasten. Leise gesetzt: sie sollen erreichbar sein, nicht laut.
+    """
+    line = Text("  ")
+    for i, (key, was) in enumerate(_TASTEN):
+        if i:
+            line.append("   ·   ", style=P.overlay)
+        line.append(key, style=f"bold {P.subtle}")
+        line.append(f" {was}", style=P.muted)
+    return line
 
 
 def zeitalter_regel(name: str, start_year: int) -> Rule:

@@ -34,9 +34,9 @@ from worldsim.config import DEFAULT_CONFIG, Config
 from worldsim.driver import SYSTEMS, worldgen
 from worldsim.events import EventKind, EventLog
 from worldsim.models import World
-from worldsim.presentation.components import balken, feed_tafel
+from worldsim.presentation.components import balken, feed_tafel, tasten_zeile
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
-from worldsim.presentation.render import Steuerung, _pump, _snapshot_years
+from worldsim.presentation.render import Steuerung, _pump, _snapshot_years, _tastenmodus
 from worldsim.presentation.worldmap import POLITICAL_VIEW, render_map
 from worldsim.rng import Rng
 from worldsim.systems import bevoelkerung
@@ -102,19 +102,26 @@ def _polity_tafel(world: World) -> Table:
     return table
 
 
-def _header(world: World, *, year: int, max_year: int, paused: bool, tempo: float) -> Text:
-    """Die Kopfzeile: Modus-Badge, Jahr, Status/Tempo und Kennzahlen."""
+def _header(
+    world: World, *, seed: int, year: int, max_year: int, paused: bool, tempo: float
+) -> Text:
+    """Die Kopfzeile: Modus-Badge, Seed, Jahr, Status/Tempo und Kennzahlen.
+
+    Der Seed steht hier, weil er die Welt IST (Save = Seed) — auch ohne Karte, deren
+    Titel ihn sonst traegt, bleibt ablesbar, welche Welt man gerade sieht.
+    """
     people = sum(bevoelkerung(p) for p in world.polities.values())
     status = "‖ paused" if paused else f"▶ {tempo:.0f}/s"
     return Text.assemble(
         (" WATCH ", f"bold {P.base} on {P.iris}"),
-        ("  year ", P.muted),
+        ("  seed ", P.muted),
+        (str(seed), f"bold {P.foam}"),
+        ("    year ", P.muted),
         (f"{year:>4}/{max_year}", f"bold {P.text}"),
         ("    ", ""),
         (status, P.gold),
         (f"    polities {len(world.polities)}", P.pine),
         (f"    people {people:,}", P.foam),
-        ("    m: map", P.muted),
     )
 
 
@@ -136,9 +143,9 @@ def _frame(
     flash: frozenset[int] = frozenset(),
     view: str = POLITICAL_VIEW,
 ) -> RenderableType:
-    """Setze einen vollstaendigen Frame zusammen (Kopf, Karte, Top-Polities, Feed)."""
+    """Setze einen vollstaendigen Frame zusammen (Kopf, Karte, Top-Polities, Feed, Tasten)."""
     body: list[RenderableType] = [
-        _header(world, year=year, max_year=max_year, paused=paused, tempo=tempo)
+        _header(world, seed=seed, year=year, max_year=max_year, paused=paused, tempo=tempo)
     ]
     if show_map:
         # Die Karte liest den **aktuellen** Besitzstand ⇒ Grenzen wandern Jahr fuer Jahr.
@@ -154,6 +161,7 @@ def _frame(
         )
     )
     body.append(feed_tafel(feed))
+    body.append(tasten_zeile())
     return Group(*body)
 
 
@@ -164,15 +172,17 @@ def watch(
     *,
     speed: float = 8.0,
     show_map: bool = True,
+    view: str = POLITICAL_VIEW,
     console: Console | None = None,
 ) -> tuple[World, EventLog]:
     """Live-Ansicht: treibe die Welt Jahr fuer Jahr und rendere jeden neuen Zustand.
 
     ``speed`` sind Jahre pro Sekunde (per ``+``/``-`` zur Laufzeit anpassbar;
-    Leertaste pausiert). ``show_map`` blendet die Terrain-/Territorienkarte ein, auf
-    der die Grenzen mit den Expansionen wandern. Gibt am Ende ``(World, EventLog)``
-    des vollstaendigen Laufs zurueck — damit Fusszeile und Zusatzansichten auf
-    demselben Stand aufsetzen. Ohne TTY werden Schnappschuss-Frames gedruckt.
+    Leertaste pausiert, ``n`` schaltet einen Einzelschritt). ``show_map`` blendet die
+    Terrain-/Territorienkarte ein, auf der die Grenzen mit den Expansionen wandern,
+    ``view`` waehlt ihre Anfangsansicht (zur Laufzeit per ``m`` umschaltbar). Gibt am
+    Ende ``(World, EventLog)`` des vollstaendigen Laufs zurueck — damit Fusszeile und
+    Zusatzansichten auf demselben Stand aufsetzen. Ohne TTY: Schnappschuss-Frames.
     """
     console = console or Console()
     feed: deque[tuple[EventKind, str]] = deque(maxlen=_FEED)
@@ -187,11 +197,11 @@ def watch(
 
     def frame(
         world: World, *, year: int, paused: bool, tempo: float,
-        flash: frozenset[int] = frozenset(), view: str = POLITICAL_VIEW,
+        flash: frozenset[int] = frozenset(), kartenblick: str = view,
     ) -> RenderableType:
         return _frame(world, feed, seed=seed, year=year, max_year=max_year,
                       paused=paused, tempo=tempo, show_map=show_map, flash=flash,
-                      view=view)
+                      view=kartenblick)
 
     # Der Besitzstand des Vorjahres, um die in diesem Jahr gewechselten Regionen (Aufgabe
     # 6) aufblitzen zu lassen. ``None`` beim ersten Frame ⇒ dort blitzt nichts.
@@ -222,18 +232,23 @@ def watch(
             console.print(frame(world, year=0, paused=False, tempo=speed))
         return final
 
-    ctrl = Steuerung(speed=1.0)
+    ctrl = Steuerung(speed=1.0, view=view)
     base_delay = 1.0 / max(speed, 0.1)
-    with Live(console=console, refresh_per_second=30, transient=False) as live:
+    with _tastenmodus(), Live(console=console, refresh_per_second=30, transient=False) as live:
         for world, log in weltlauf(seed, years, cfg):
             if ctrl.quit:
                 break
             ingest(world, log)
             live.update(
                 frame(world, year=world.year, paused=ctrl.paused,
-                      tempo=speed * ctrl.speed, flash=changed(world), view=ctrl.view)
+                      tempo=speed * ctrl.speed, flash=changed(world), kartenblick=ctrl.view)
             )
             _pump(ctrl, base_delay / ctrl.speed)
+            if ctrl.step:
+                # Ein Einzelschritt ist genau ein Jahr: danach steht die Welt wieder
+                # still (sonst bliebe ``step`` gesetzt und die Pause griffe nie mehr).
+                ctrl.step = False
+                ctrl.paused = True
 
     if final is None:  # years == 0
         final = (worldgen(Rng(seed), cfg), EventLog())

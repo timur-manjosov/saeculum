@@ -30,6 +30,7 @@ from worldsim.presentation.components import (
     faktoren_text,
     feed_tafel,
     kausal_zeile,
+    tasten_zeile,
     zeitalter_regel,
 )
 from worldsim.presentation.explore import explore
@@ -93,6 +94,7 @@ __all__ = [
     "render_map",
     "replay",
     "sparkline",
+    "tasten_zeile",
     "visuelle_historie",
     "warum_entitaet",
     "warum_event",

@@ -32,6 +32,14 @@ _SETBACK_KINDS = (
     EventKind.BUENDNIS_BRUCH,
 )
 
+# Arten, deren ``subjects`` ein UNGEORDNETES Paar sind: die Reibung wird je
+# Richtung gefuehrt (``pol.friction[other]``), also emittiert ``friction`` pro
+# Schwelle zwei Events — (A,B) und (B,A) —, die beide "between A and B" erzaehlen.
+# Fuer die Narration ist das eine Aussage, nicht zwei. Nur hier eingetragene Arten
+# duerfen gespiegelt zusammenfallen; bei SCHLACHT etwa TRAEGT die Reihenfolge die
+# Bedeutung (Sieger, Verlierer) — ein Zusammenfassen wuerde eine Umkehr verbergen.
+_SYMMETRISCHE_ARTEN = frozenset({EventKind.GRENZREIBUNG})
+
 
 def _faktor_text(event_id: EventId, log: EventLog) -> str:
     """Die dominanten Faktoren eines Events als kompakter ``label +w``-Anhang."""
@@ -39,6 +47,38 @@ def _faktor_text(event_id: EventId, log: EventLog) -> str:
     if not top:
         return ""
     return " [" + ", ".join(f"{label} {weight:+.2f}" for label, weight in top) + "]"
+
+
+def _staerke(log: EventLog, event_id: EventId) -> float:
+    """Der groesste Faktor-Betrag eines Events — sein Gewicht in der Erzaehlung."""
+    event = log.get(event_id)
+    return max((abs(f.weight) for f in event.factors), default=0.0)
+
+
+def _ohne_spiegelpaare(causes: list[EventId], log: EventLog) -> list[EventId]:
+    """Fasse gespiegelte Ursachen — (A,B) und (B,A) derselben Art im selben Jahr —
+    zu einer zusammen.
+
+    Beide Richtungen erzaehlen denselben Satz; gezeigt wird die mit dem groesseren
+    Faktor-Betrag (die staerkere Seite der Feindschaft), bei Gleichstand die mit der
+    kleineren ``EventId``. Reine Anzeige-Entscheidung: der Kausalgraph bleibt
+    vollstaendig, ``chronicle.warum`` laeuft weiter ueber alle Kanten.
+    """
+    beste: dict[tuple[EventKind, int, frozenset[EntityId]], EventId] = {}
+    for cid in causes:
+        event = log.get(cid)
+        if event.kind not in _SYMMETRISCHE_ARTEN:
+            continue
+        schluessel = (event.kind, event.year, frozenset(event.subjects))
+        bisher = beste.get(schluessel)
+        if bisher is None or (_staerke(log, cid), -cid) > (_staerke(log, bisher), -bisher):
+            beste[schluessel] = cid
+    behalten = set(beste.values())
+    return [
+        cid
+        for cid in causes
+        if log.get(cid).kind not in _SYMMETRISCHE_ARTEN or cid in behalten
+    ]
 
 
 def warum_event(
@@ -60,14 +100,14 @@ def warum_event(
         seen.add(eid)
         if depth >= max_depth:
             return
-        causes = [c for c in sorted(event.causes) if c not in seen]
+        causes = _ohne_spiegelpaare([c for c in sorted(event.causes) if c not in seen], log)
         for cause in causes:
             rec(cause, depth + 1, "    " + prefix if depth else "  └─ ")
 
     root = log.get(event_id)
     header = f"Why? — {erzaehle(world, log, root)}"
     lines.append(header)
-    for cause in [c for c in sorted(root.causes) if c not in seen]:
+    for cause in _ohne_spiegelpaare([c for c in sorted(root.causes) if c not in seen], log):
         rec(cause, 1, "  └─ ")
     if len(lines) == 1:
         lines.append("  (no recorded cause — a root event.)")

@@ -17,7 +17,7 @@ import sys
 from rich.console import Console
 from worldsim.config import DEFAULT_CONFIG
 from worldsim.driver import simulate
-from worldsim.events import EventDraft, EventKind, EventLog, FactorLabel
+from worldsim.events import EventDraft, EventKind, EventLog, Factor, FactorLabel
 from worldsim.models import World
 from worldsim.presentation import (
     ViewState,
@@ -128,6 +128,85 @@ def test_why_event_traverses_causes_backwards() -> None:
     assert len(lines) == 3
     # Reihenfolge: die Kette laeuft von der Wirkung (e2) zur Wurzel (e0).
     assert text.index("Year 2") < text.index("Year 1") < text.index("Year 0")
+
+
+def _reibung(log: EventLog, year: int, a: int, b: int, weight: float) -> int:
+    """Ein GRENZREIBUNG-Event der Richtung a→b mit gegebenem Gewicht."""
+    return log.append(
+        EventDraft(
+            year=year,
+            kind=EventKind.GRENZREIBUNG,
+            subjects=(a, b),
+            factors=(Factor(FactorLabel.GRENZREIBUNG, weight),),
+        )
+    )
+
+
+def test_why_event_collapses_mirrored_friction_pairs() -> None:
+    """Gespiegelte Reibung (A,B)/(B,A) erzaehlt EINE Aussage — nicht zwei Zeilen.
+
+    ``friction`` fuehrt die Reibung je Richtung und emittiert pro Schwelle zwei
+    Events; beide erzaehlen "between A and B". Gezeigt wird die staerkere Seite.
+    """
+    log = EventLog()
+    schwach = _reibung(log, 40, 1, 2, 2.20)
+    stark = _reibung(log, 40, 2, 1, 3.10)
+    krieg = log.append(
+        EventDraft(year=41, kind=EventKind.KRIEG, subjects=(1, 2), causes=(schwach, stark))
+    )
+
+    lines = warum_event(World(), log, krieg)
+    reibungszeilen = [line for line in lines if "border tension" in line]
+    assert len(reibungszeilen) == 1, reibungszeilen
+    # Es ueberlebt die staerkere Richtung — der Betrag darf nicht verlorengehen.
+    assert "+3.10" in reibungszeilen[0]
+
+
+def test_why_event_keeps_directional_kinds_apart() -> None:
+    """Nur symmetrische Arten fallen zusammen: bei SCHLACHT TRAEGT die Reihenfolge Sinn.
+
+    (A schlaegt B) und (B schlaegt A) im selben Jahr sind zwei Ereignisse — ein
+    Zusammenfassen wuerde eine echte Umkehr verbergen.
+    """
+    log = EventLog()
+    hin = log.append(EventDraft(year=40, kind=EventKind.SCHLACHT, subjects=(1, 2)))
+    zurueck = log.append(EventDraft(year=40, kind=EventKind.SCHLACHT, subjects=(2, 1)))
+    wende = log.append(
+        EventDraft(year=41, kind=EventKind.WENDEPUNKT, subjects=(1,), causes=(hin, zurueck))
+    )
+
+    lines = warum_event(World(), log, wende)
+    assert len(lines) == 3  # Kopf + beide Schlachten
+
+
+def test_why_chain_shows_no_mirrored_narration_in_a_real_run() -> None:
+    """Im laufenden Lauf traegt keine Warum-Kette zwei gespiegelte Reibungszeilen.
+
+    Gegenprobe am echten Log (nicht an einer gebauten Welt): fuer jeden Krieg mit
+    Reibungs-Ursachen darf je Jahr hoechstens EINE Reibungszeile erscheinen.
+    """
+    world, log = simulate(seed=5, years=200)
+    kriege = [e for e in log if e.kind == EventKind.KRIEG and e.causes]
+    assert kriege, "Lauf ohne Krieg mit Ursachen — Testannahme gebrochen"
+
+    geprueft = 0
+    for krieg in kriege:
+        lines = warum_event(world, log, krieg.id)
+        reibung = [line for line in lines if "border tension" in line]
+        if not reibung:
+            continue
+        geprueft += 1
+        # "  └─ Year N: border tension rose between A and B. [Grenzreibung +w]"
+        # Der Faktor-Anhang muss zuerst weg, sonst klebt er am zweiten Namen und
+        # kein Spiegelpaar faende je sein Gegenstueck (der Test waere wirkungslos).
+        schluessel = []
+        for line in reibung:
+            kern = line.split(" [")[0]
+            jahr = kern.split(":")[0].strip(" └─")
+            paar = frozenset(kern.split("between")[1].strip(" .").split(" and "))
+            schluessel.append((jahr, paar))
+        assert len(schluessel) == len(set(schluessel)), lines
+    assert geprueft > 0, "keine Reibungs-Ursachen erreicht — Test ohne Aussage"
 
 
 def test_why_event_root_has_no_cause_note() -> None:
