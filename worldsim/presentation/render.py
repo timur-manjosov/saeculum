@@ -15,10 +15,13 @@ mit ``watch``.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import select
 import sys
 import time
 from collections import deque
+from collections.abc import Generator
 from dataclasses import dataclass
 
 from rich.console import Console, Group, RenderableType
@@ -30,7 +33,12 @@ from worldsim.chronicle import epochen, erzaehle
 from worldsim.config import Config
 from worldsim.events import Event, EventKind, EventLog
 from worldsim.models import World
-from worldsim.presentation.components import balken, feed_tafel, zeitalter_regel
+from worldsim.presentation.components import (
+    balken,
+    feed_tafel,
+    tasten_zeile,
+    zeitalter_regel,
+)
 from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.visual import ViewState
 from worldsim.presentation.worldmap import MAP_VIEWS, POLITICAL_VIEW, render_map
@@ -137,22 +145,29 @@ def _frame(
     max_year: int,
     title: str,
     ctrl: Steuerung,
+    tempo: float,
     show_map: bool,
     ages: list[tuple[int, str]],
 ) -> RenderableType:
-    """Setze einen vollstaendigen Frame zusammen (Kopf, Banner, Karte, Nationen, Feed)."""
-    status = "‖ paused" if ctrl.paused else f"▶ {ctrl.speed:.1f}×"  # noqa: RUF001
+    """Setze einen vollstaendigen Frame zusammen (Kopf, Banner, Karte, Nationen, Feed, Tasten).
+
+    ``tempo`` ist das **wirksame** Tempo in Jahren pro Sekunde (Grundtempo mal
+    Steuerungs-Faktor) — dieselbe Einheit, die die CLI mit ``--speed`` setzt und die
+    die Live-Ansicht anzeigt: eine Zahl, eine Bedeutung.
+    """
+    status = "‖ paused" if ctrl.paused else f"▶ {tempo:.0f}/s"
     age_name, boundary = _age_at(ages, year)
     header = Text.assemble(
         (f" {title} ", f"bold {P.base} on {P.iris}"),
-        ("  year ", P.muted),
+        ("  seed ", P.muted),
+        (str(seed), f"bold {P.foam}"),
+        ("    year ", P.muted),
         (f"{year:>4}/{max_year}", f"bold {P.text}"),
         ("    ", ""),
         (status, P.gold),
         (f"    nations {len(view.territory_counts())}", P.pine),
         ("    ", ""),
         (age_name, P.foam),
-        ("    m: map", P.muted),
     )
     body: list[RenderableType] = [header]
     # Zeitalter-Wechsel: im Eroeffnungsjahr ein Banner quer ueber den Frame.
@@ -162,7 +177,35 @@ def _frame(
         body.append(render_map(world, seed=seed, owners=dict(view.owner), view=ctrl.view))
     body.append(_top_table(world, view))
     body.append(feed_tafel(feed))
+    body.append(tasten_zeile())
     return Group(*body)
+
+
+@contextlib.contextmanager
+def _tastenmodus() -> Generator[None]:
+    """Das Terminal fuer die Dauer der Ansicht auf einzelne Tastendruecke stellen (cbreak).
+
+    Ohne das liefert der Zeilenmodus des Terminals eine Taste erst nach ``Enter`` —
+    die angezeigte Tastenleiste waere ein Versprechen, das die Ansicht nicht haelt.
+    ``cbreak`` laesst ``Ctrl-C`` bewusst ein Signal bleiben. Der alte Zustand wird
+    **immer** zurueckgegeben, auch wenn der Lauf mit einer Ausnahme endet.
+    """
+    try:
+        import termios
+        import tty
+    except ImportError:  # pragma: no cover - kein POSIX-Terminal (z.B. Windows)
+        yield
+        return
+    if not sys.stdin.isatty():  # Pipe/Test: es gibt nichts umzuschalten
+        yield
+        return
+    fd = sys.stdin.fileno()
+    vorher = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, vorher)
 
 
 def _raw_key(timeout: float) -> str | None:
@@ -172,9 +215,11 @@ def _raw_key(timeout: float) -> str | None:
             time.sleep(timeout)
         return None
     ready, _, _ = select.select([sys.stdin], [], [], timeout)
-    if ready:
-        return sys.stdin.read(1)
-    return None
+    if not ready:
+        return None
+    # Direkt am Deskriptor lesen: der gepufferte Textstrom wuerde auf eine volle Zeile
+    # warten wollen — die Steuerung hoert aber auf den einzelnen Tastendruck.
+    return os.read(sys.stdin.fileno(), 1).decode("utf-8", "replace") or None
 
 
 def _pump(ctrl: Steuerung, delay: float) -> None:
@@ -194,20 +239,26 @@ def _play(
     *,
     seed: int,
     title: str,
-    base_delay: float,
+    speed: float,
     interactive: bool,
     show_map: bool,
+    kartenblick: str,
     console: Console | None,
     snapshot_frames: int,
 ) -> None:
-    """Gemeinsamer Kern von Live und Replay: den Log Jahr fuer Jahr abspielen."""
+    """Gemeinsamer Kern von Live und Replay: den Log Jahr fuer Jahr abspielen.
+
+    ``speed`` sind Jahre pro Sekunde — dieselbe Einheit wie in ``watch``; die
+    ``Steuerung`` skaliert sie zur Laufzeit (``+``/``-``).
+    """
     console = console or Console()
     view = ViewState()
     feed: deque[tuple[EventKind, str]] = deque(maxlen=_FEED)
     by_year = _events_by_year(log)
     max_year = max(by_year, default=0)
     ages = epochen(world, log)  # Zeitalter-Grenzen (rein aus dem Log, kein Re-Sim)
-    ctrl = Steuerung(speed=1.0)
+    ctrl = Steuerung(speed=1.0, view=kartenblick)
+    base_delay = 1.0 / max(speed, 0.1)
 
     def advance(year: int) -> None:
         view.year = year
@@ -225,19 +276,20 @@ def _play(
                 console.print(
                     _frame(
                         world, view, feed, seed=seed, year=year, max_year=max_year,
-                        title=title, ctrl=ctrl, show_map=show_map, ages=ages,
+                        title=title, ctrl=ctrl, tempo=speed, show_map=show_map, ages=ages,
                     )
                 )
         return
 
-    with Live(console=console, refresh_per_second=30, transient=False) as live:
+    with _tastenmodus(), Live(console=console, refresh_per_second=30, transient=False) as live:
         year = 0
         while year <= max_year and not ctrl.quit:
             advance(year)
             live.update(
                 _frame(
                     world, view, feed, seed=seed, year=year, max_year=max_year,
-                    title=title, ctrl=ctrl, show_map=show_map, ages=ages,
+                    title=title, ctrl=ctrl, tempo=speed * ctrl.speed, show_map=show_map,
+                    ages=ages,
                 )
             )
             if interactive:
@@ -264,18 +316,20 @@ def replay(
     cfg: Config,
     *,
     seed: int = 0,
-    speed: float = 1.0,
+    speed: float = 25.0,
     show_map: bool = True,
+    view: str = POLITICAL_VIEW,
     console: Console | None = None,
 ) -> None:
     """Replay: die ganze Geschichte im Zeitraffer aus dem Log (Aufgabe 4).
 
     **Keine** Re-Simulation — nur den gespeicherten Event-Log visuell abspielen,
     mit Tempo-/Pause-/Schritt-/Beenden-Steuerung auf einem echten Terminal.
+    ``speed`` sind Jahre pro Sekunde (wie in ``watch``, nur raffender voreingestellt),
+    ``view`` waehlt die Anfangsansicht der Karte (zur Laufzeit per ``m`` umschaltbar).
     """
     _ = cfg  # read-only Signatur-Konsistenz; die Ansicht braucht keine Config
     _play(
-        world, log, seed=seed, title="REPLAY",
-        base_delay=0.04 / max(speed, 0.01), interactive=True,
-        show_map=show_map, console=console, snapshot_frames=6,
+        world, log, seed=seed, title="REPLAY", speed=speed, interactive=True,
+        show_map=show_map, kartenblick=view, console=console, snapshot_frames=6,
     )

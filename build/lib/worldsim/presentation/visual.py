@@ -22,6 +22,7 @@ from enum import StrEnum
 
 from worldsim.events import Event, EventKind, EventLog
 from worldsim.models import EntityId
+from worldsim.presentation.palette import ROSE_PINE_MOON
 
 __all__ = [
     "ViewState",
@@ -48,6 +49,7 @@ class VisualKind(StrEnum):
     FORSCHUNG = "FORSCHUNG"  # Innovation
     WENDEPUNKT = "WENDEPUNKT"  # Wendepunkt
     HERRSCHER = "HERRSCHER"  # Tod/Sukzession
+    ABSPALTUNG = "ABSPALTUNG"  # Abspaltung (dynastische/politische Spaltung)
     WACHSTUM = "WACHSTUM"  # Bevoelkerungs-Meilenstein
     SPANNUNG = "SPANNUNG"  # Grenzreibung
     NEUTRAL = "NEUTRAL"  # Rest
@@ -72,24 +74,35 @@ class VisualEffect:
     flash: bool = False
 
 
-# Zentrale Tabelle: visuelle Kategorie ⇒ (Farbe, Glyphe, Blitz). Ein Ort, an dem
-# das Aussehen aller Ereignisarten festgelegt ist.
+# Zentrale Tabelle: visuelle Kategorie ⇒ (Farbe, Glyphe, Blitz). **Ein** Ort, an
+# dem das Aussehen aller Ereignisarten festgelegt ist; die Farben stammen
+# ausschliesslich aus der Rosé-Pine-Moon-Palette (keine Hex-Werte hier). Die sechs
+# Akzente tragen Bedeutung:
+#   love  → Konflikt (Krieg, Schlacht, Bruch)
+#   gold  → Not & Reibung (Hungersnot, Spannung)
+#   rose  → akute Katastrophe (Erdbeben)
+#   pine  → Wachstum & Bindung (Gruendung, Expansion, Buendnis, Bevoelkerung)
+#   foam  → Wissen (Innovation/Werk)
+#   iris  → Dynastie, Spaltung, Glaube (Sukzession, Abspaltung, Konversion/Schisma)
+# ``text`` (hell, fett per Blitz) hebt den Wendepunkt als hellsten Moment hervor.
+_P = ROSE_PINE_MOON
 _STYLE: dict[VisualKind, tuple[str, str, bool]] = {
-    VisualKind.STADT: ("bright_green", "⌂", False),
-    VisualKind.GRENZE: ("green", "▸", False),
-    VisualKind.KRIEG: ("bright_red", "⚔", False),
-    VisualKind.SCHLACHT: ("red", "×", False),  # noqa: RUF001
-    VisualKind.BUENDNIS: ("cyan", "═", False),
-    VisualKind.BRUCH: ("bright_magenta", "╫", False),
-    VisualKind.KATASTROPHE: ("bright_yellow", "✷", True),
-    VisualKind.HUNGER: ("yellow", "◦", False),
-    VisualKind.GLAUBE: ("blue", "†", False),
-    VisualKind.FORSCHUNG: ("bright_cyan", "✦", False),
-    VisualKind.WENDEPUNKT: ("bright_white", "★", True),
-    VisualKind.HERRSCHER: ("magenta", "♔", False),
-    VisualKind.WACHSTUM: ("green", "↑", False),
-    VisualKind.SPANNUNG: ("yellow", "≁", False),
-    VisualKind.NEUTRAL: ("white", "·", False),
+    VisualKind.STADT: (_P.pine, "⌂", False),
+    VisualKind.GRENZE: (_P.pine, "▸", False),
+    VisualKind.KRIEG: (_P.love, "⚔", False),
+    VisualKind.SCHLACHT: (_P.love, "×", False),  # noqa: RUF001
+    VisualKind.BUENDNIS: (_P.pine, "═", False),
+    VisualKind.BRUCH: (_P.love, "╫", False),
+    VisualKind.KATASTROPHE: (_P.rose, "✷", True),
+    VisualKind.HUNGER: (_P.gold, "◦", False),
+    VisualKind.GLAUBE: (_P.iris, "†", False),
+    VisualKind.FORSCHUNG: (_P.foam, "✦", False),
+    VisualKind.WENDEPUNKT: (_P.text, "★", True),
+    VisualKind.HERRSCHER: (_P.iris, "♔", False),
+    VisualKind.ABSPALTUNG: (_P.iris, "⋔", False),
+    VisualKind.WACHSTUM: (_P.pine, "↑", False),
+    VisualKind.SPANNUNG: (_P.gold, "≁", False),
+    VisualKind.NEUTRAL: (_P.subtle, "·", False),
 }
 
 _KIND_TO_VISUAL: dict[EventKind, VisualKind] = {
@@ -99,9 +112,7 @@ _KIND_TO_VISUAL: dict[EventKind, VisualKind] = {
     EventKind.KRIEG: VisualKind.KRIEG,
     EventKind.BUENDNIS: VisualKind.BUENDNIS,
     EventKind.BUENDNIS_BRUCH: VisualKind.BRUCH,
-    EventKind.PEST: VisualKind.KATASTROPHE,
     EventKind.ERDBEBEN: VisualKind.KATASTROPHE,
-    EventKind.DUERRE: VisualKind.KATASTROPHE,
     EventKind.HUNGERSNOT: VisualKind.HUNGER,
     EventKind.KONVERSION: VisualKind.GLAUBE,
     EventKind.SCHISMA: VisualKind.GLAUBE,
@@ -109,7 +120,7 @@ _KIND_TO_VISUAL: dict[EventKind, VisualKind] = {
     EventKind.WENDEPUNKT: VisualKind.WENDEPUNKT,
     EventKind.TOD_FIGUR: VisualKind.HERRSCHER,
     EventKind.SUKZESSION: VisualKind.HERRSCHER,
-    EventKind.ABSPALTUNG: VisualKind.GRENZE,
+    EventKind.ABSPALTUNG: VisualKind.ABSPALTUNG,
     EventKind.BEVOELKERUNG_MEILENSTEIN: VisualKind.WACHSTUM,
     EventKind.GRENZREIBUNG: VisualKind.SPANNUNG,
 }

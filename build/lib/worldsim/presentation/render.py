@@ -1,13 +1,16 @@
-"""render — die einzige Pixel-erzeugende Schicht: Live-Dashboard, Replay, Steuerung.
+"""render — die Zeitraffer-Ansicht (Replay) samt Beobachtungs-Steuerung.
 
 Baut auf ``rich``. Konsumiert **read-only** ``World`` + ``EventLog`` und die
-zentrale ``event_to_visual``-Abbildung — beide Ansichten (Live und Replay) teilen
-denselben ``ViewState``-Reducer und dieselbe Optik. **Keine** Simulationslogik,
-**keine** Re-Simulation: Replay spielt nur den gespeicherten Log ab.
+zentrale ``event_to_visual``-Abbildung — Replay teilt den ``ViewState``-Reducer
+und die Optik mit der Live-Ansicht. **Keine** Simulationslogik, **keine**
+Re-Simulation: Replay spielt nur den gespeicherten Log ab. (Die Jahr-fuer-Jahr
+*treibende* Live-Ansicht liegt in ``watch``.)
 
 Auf einem echten Terminal animiert ``rich.Live`` mit Tempo-/Pause-/Schritt-/
 Beenden-Steuerung. Ohne Terminal (Pipe, Tests) werden stattdessen einige
-Schnappschuss-Frames als Text gedruckt — schnell und ohne Schlafphasen.
+Schnappschuss-Frames als Text gedruckt — schnell und ohne Schlafphasen. Die
+Pacing-Bausteine (``Steuerung``, Tastenpumpe, Schnappschuss-Jahre) teilt Replay
+mit ``watch``.
 """
 
 from __future__ import annotations
@@ -20,19 +23,20 @@ from dataclasses import dataclass
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from worldsim.chronicle import erzaehle
+from worldsim.chronicle import epochen, erzaehle
 from worldsim.config import Config
 from worldsim.events import Event, EventKind, EventLog
 from worldsim.models import World
-from worldsim.presentation.components import ereignis_text
+from worldsim.presentation.components import balken, feed_tafel, zeitalter_regel
+from worldsim.presentation.palette import ROSE_PINE_MOON as P
 from worldsim.presentation.visual import ViewState
-from worldsim.presentation.worldmap import render_map
+from worldsim.presentation.worldmap import MAP_VIEWS, POLITICAL_VIEW, render_map
+from worldsim.systems import bevoelkerung
 
-__all__ = ["Steuerung", "live_dashboard", "replay"]
+__all__ = ["Steuerung", "replay"]
 
 _FEED = 9  # Zeilen im Ereignis-Feed
 _TOP = 6  # angezeigte Top-Nationen
@@ -40,15 +44,21 @@ _TOP = 6  # angezeigte Top-Nationen
 
 @dataclass
 class Steuerung:
-    """Beobachtungs-Steuerung: Tempo, Pause, Einzelschritt, Beenden (Aufgabe 8)."""
+    """Beobachtungs-Steuerung: Tempo, Pause, Einzelschritt, Kartenansicht, Beenden.
+
+    Reine Beobachter-Zustaende — nichts hiervon beruehrt die Simulation. Die Kartenansicht
+    (``m``) gehoert genau deshalb hierher: welche der beiden Ansichten man sieht, ist eine
+    Frage an den Betrachter, nicht an die Welt.
+    """
 
     speed: float = 1.0
     paused: bool = False
     step: bool = False
     quit: bool = False
+    view: str = POLITICAL_VIEW
 
     def taste(self, key: str) -> None:
-        """Verarbeite eine Steuertaste (Leertaste=Pause, n=Schritt, +/-=Tempo, q=Ende)."""
+        """Verarbeite eine Steuertaste (Leertaste=Pause, n=Schritt, +/-=Tempo, m=Karte, q=Ende)."""
         if key in (" ", "p"):
             self.paused = not self.paused
         elif key in ("n", "\x1b"):  # n oder Pfeil (grob): ein Schritt
@@ -58,6 +68,10 @@ class Steuerung:
             self.speed = min(self.speed * 1.5, 64.0)
         elif key == "-":
             self.speed = max(self.speed / 1.5, 0.1)
+        elif key == "m":
+            # Zwischen der politischen und der Terrain-Ansicht umschalten: jede ist fuer
+            # ihren Zweck aufgeraeumt, keine muss beides koennen.
+            self.view = MAP_VIEWS[(MAP_VIEWS.index(self.view) + 1) % len(MAP_VIEWS)]
         elif key in ("q", "\x03"):
             self.quit = True
 
@@ -69,35 +83,48 @@ def _events_by_year(log: EventLog) -> dict[int, list[Event]]:
     return grouped
 
 
+def _age_at(ages: list[tuple[int, str]], year: int) -> tuple[str, bool]:
+    """Der bis ``year`` geltende Zeitalter-Name und ob ``year`` ein Zeitalter eroeffnet.
+
+    ``ages`` sind die ``(Startjahr, Name)``-Grenzen aus ``chronicle.epochen`` — rein
+    aus dem Log, ohne Re-Simulation. Am Startjahr eines Zeitalters zeigt der Replay
+    ein Banner (``boundary``); dazwischen traegt die Kopfzeile den laufenden Namen.
+    """
+    name = ages[0][1] if ages else "—"
+    boundary = False
+    for start, aname in ages:
+        if start <= year:
+            name = aname
+        if start == year:
+            boundary = True
+    return name, boundary
+
+
 def _top_table(world: World, view: ViewState) -> Table:
     """Rangtabelle der maechtigsten Nationen aus dem rekonstruierten Besitz."""
     counts = view.territory_counts()
     ranked = sorted(counts.items(), key=lambda kv: (kv[1], -kv[0]), reverse=True)[:_TOP]
-    table = Table(box=None, pad_edge=False, expand=False)
-    table.add_column("nation", style="bold")
-    table.add_column("land", justify="right")
-    table.add_column("pop", justify="right")
-    table.add_column("faith")
+    max_land = max((c for _, c in ranked), default=1)
+    table = Table(box=None, pad_edge=False, expand=False, header_style=P.subtle)
+    table.add_column("nation", style=f"bold {P.text}")
+    table.add_column("size")
+    table.add_column("land", justify="right", style=P.subtle)
+    table.add_column("people", justify="right", style=P.subtle)
+    table.add_column("creed", style=P.iris)
     for pid, count in ranked:
         pol = world.polities.get(pid)
         name = pol.name if pol else f"#{pid}"
-        pop = view.population.get(pid, pol.population if pol else 0)
+        pop = view.population.get(pid, bevoelkerung(pol) if pol else 0)
         faith_id = view.faith.get(pid, pol.identity_id if pol else None)
         faith = world.identities.get(faith_id) if faith_id else None
-        table.add_row(name, str(count), str(pop), faith.name if faith else "?")
+        table.add_row(
+            name,
+            balken(count, max_land, color=P.pine),
+            f"{count}",
+            f"{pop:,}",
+            faith.name if faith else "—",
+        )
     return table
-
-
-def _feed_panel(feed: deque[tuple[EventKind, str]]) -> Panel:
-    """Das Feed-Panel der juengsten Ereignisse — dieselbe Zeile wie die statische Chronik."""
-    text = Text()
-    for i, (kind, line) in enumerate(feed):
-        if i:
-            text.append("\n")
-        text.append_text(ereignis_text(kind, line))
-    if not feed:
-        text.append("…", style="dim")
-    return Panel(text, title="recent events", border_style="grey50")
 
 
 def _frame(
@@ -111,22 +138,30 @@ def _frame(
     title: str,
     ctrl: Steuerung,
     show_map: bool,
+    ages: list[tuple[int, str]],
 ) -> RenderableType:
-    """Setze einen vollstaendigen Frame zusammen (Kopf, Karte, Top-Nationen, Feed)."""
+    """Setze einen vollstaendigen Frame zusammen (Kopf, Banner, Karte, Nationen, Feed)."""
     status = "‖ paused" if ctrl.paused else f"▶ {ctrl.speed:.1f}×"  # noqa: RUF001
+    age_name, boundary = _age_at(ages, year)
     header = Text.assemble(
-        (f" {title} ", "bold white on dark_blue"),
-        ("  year ", "bold"),
-        (f"{year:>4}/{max_year}", "bright_white"),
-        ("   ", ""),
-        (status, "bright_yellow"),
-        (f"   nations {len(view.territory_counts())}", "cyan"),
+        (f" {title} ", f"bold {P.base} on {P.iris}"),
+        ("  year ", P.muted),
+        (f"{year:>4}/{max_year}", f"bold {P.text}"),
+        ("    ", ""),
+        (status, P.gold),
+        (f"    nations {len(view.territory_counts())}", P.pine),
+        ("    ", ""),
+        (age_name, P.foam),
+        ("    m: map", P.muted),
     )
     body: list[RenderableType] = [header]
+    # Zeitalter-Wechsel: im Eroeffnungsjahr ein Banner quer ueber den Frame.
+    if boundary:
+        body.append(zeitalter_regel(age_name, year))
     if show_map:
-        body.append(render_map(world, seed=seed, owners=dict(view.owner)))
+        body.append(render_map(world, seed=seed, owners=dict(view.owner), view=ctrl.view))
     body.append(_top_table(world, view))
-    body.append(_feed_panel(feed))
+    body.append(feed_tafel(feed))
     return Group(*body)
 
 
@@ -171,6 +206,7 @@ def _play(
     feed: deque[tuple[EventKind, str]] = deque(maxlen=_FEED)
     by_year = _events_by_year(log)
     max_year = max(by_year, default=0)
+    ages = epochen(world, log)  # Zeitalter-Grenzen (rein aus dem Log, kein Re-Sim)
     ctrl = Steuerung(speed=1.0)
 
     def advance(year: int) -> None:
@@ -189,7 +225,7 @@ def _play(
                 console.print(
                     _frame(
                         world, view, feed, seed=seed, year=year, max_year=max_year,
-                        title=title, ctrl=ctrl, show_map=show_map,
+                        title=title, ctrl=ctrl, show_map=show_map, ages=ages,
                     )
                 )
         return
@@ -201,7 +237,7 @@ def _play(
             live.update(
                 _frame(
                     world, view, feed, seed=seed, year=year, max_year=max_year,
-                    title=title, ctrl=ctrl, show_map=show_map,
+                    title=title, ctrl=ctrl, show_map=show_map, ages=ages,
                 )
             )
             if interactive:
@@ -220,28 +256,6 @@ def _snapshot_years(max_year: int, count: int) -> set[int]:
         return {max_year}
     step = max_year / (count - 1)
     return {min(max_year, round(i * step)) for i in range(count)} | {max_year}
-
-
-def live_dashboard(
-    world: World,
-    log: EventLog,
-    cfg: Config,
-    *,
-    seed: int = 0,
-    fps: float = 8.0,
-    show_map: bool = True,
-    console: Console | None = None,
-) -> None:
-    """Live-Dashboard: aktuelles Jahr, Top-Nationen, juengste Events (Aufgabe 2).
-
-    Spielt die visuelle Historie im normalen Tempo ab (Beobachtung, keine
-    Steuerung). Auf einem TTY animiert es; sonst druckt es Schnappschuss-Frames.
-    """
-    _ = cfg  # read-only Signatur-Konsistenz; die Ansicht braucht keine Config
-    _play(
-        world, log, seed=seed, title="LIVE", base_delay=1.0 / max(fps, 0.1),
-        interactive=False, show_map=show_map, console=console, snapshot_frames=5,
-    )
 
 
 def replay(

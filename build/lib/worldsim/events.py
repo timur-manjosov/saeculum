@@ -62,12 +62,23 @@ class EventKind(StrEnum):
     # Phase 4 aktiv (Identitaet/Glaube):
     KONVERSION = "KONVERSION"
     SCHISMA = "SCHISMA"
-    # Phase 5 aktiv (Schocks, Technologie, Wendepunkte):
-    PEST = "PEST"
+    # Phase 5 aktiv (Schocks, Technologie, Wendepunkte). Aenderung 7: von den drei
+    # gewuerfelten Schocks bleibt EINER — das Erdbeben, der einzige, der keine soziale
+    # Ursache haben KANN. Pest und Duerre sind fort: was sie taten (Bevoelkerung toeten,
+    # Vorraete vernichten), tut die Welt jetzt aus sich selbst — Hungersnot aus
+    # Uebervoelkerung, Mobilmachung und verlorenem Land.
     ERDBEBEN = "ERDBEBEN"
-    DUERRE = "DUERRE"
     INNOVATION = "INNOVATION"
     WENDEPUNKT = "WENDEPUNKT"
+    # Aenderung 6 aktiv (Entladungen des Spannungszustands). Die dominante
+    # Komponente der Spannung waehlt die Art: Volksdruck ⇒ AUFSTAND, Elitendruck
+    # ⇒ PUTSCH oder ABSPALTUNG (oben), Fiskaldruck ⇒ BANKROTT, extrem/zusammen-
+    # gesetzt ⇒ KOLLAPS. Der Aussendruck entlaedt sich nach aussen und braucht
+    # keine eigene Art: sein Ereignis ist der KRIEG (oben).
+    AUFSTAND = "AUFSTAND"
+    PUTSCH = "PUTSCH"
+    BANKROTT = "BANKROTT"
+    KOLLAPS = "KOLLAPS"
     # Fuer spaetere Phasen reserviert:
     WERK = "WERK"
     MIGRATION = "MIGRATION"
@@ -116,10 +127,33 @@ class FactorLabel(StrEnum):
     GLAUBENSTREUE = "Glaubenstreue"
     GLAUBENSGROESSE = "Glaubensgroesse"
     GLAUBENSEIFER = "Glaubenseifer"
+    # Aenderung 4: utility-basierte Zielwahl (Faktoren des Zielmenues).
+    BEHARRUNG = "Beharrung"
+    VOLKSGROLL = "Volksgroll"
+    EISENBEDARF = "Eisenbedarf"
+    BEUTE = "Beute"
+    # Aenderung 5: Handel und Abhaengigkeit (Krieg aus Handelsverflechtung).
+    HANDELSABHAENGIGKEIT = "Handelsabhaengigkeit"
+    # Schritt 3: das Terrain als Barriere UND Korridor. Der Preis des Weges dorthin,
+    # gemessen gegen die offene Ebene: negativ ueber den Kamm, durch die Wueste, ueber
+    # die See — positiv den Fluss hinunter und die Kueste entlang. Auf der Ebene selbst
+    # exakt 0, faellt also aus der Begruendung heraus. Steht dieser Faktor in der
+    # Faktorliste eines Krieges oder einer Expansion, dann hat die Geografie mitgeredet;
+    # sein Vorzeichen sagt, ob sie abgehalten oder gelockt hat.
+    WEGEKOSTEN = "Wegekosten"
+    # Aenderung 6: die vier Komponenten des Spannungszustands. Ihre Summe IST die
+    # Spannung, ihre groesste waehlt die Art der Entladung — die Faktorliste einer
+    # Entladung ist exakt diese Rechnung (Strukturell-Demografische Theorie).
+    VOLKSDRUCK = "Volksdruck"
+    ELITENDRUCK = "Elitendruck"
+    FISKALDRUCK = "Fiskaldruck"
+    AUSSENDRUCK = "Aussendruck"
     # Phase 5: Schocks, Technologie, Wendepunkte.
-    PEST = "Pest"
     ERDBEBEN = "Erdbeben"
-    DUERRE = "Duerre"
+    # Aenderung 7: die Ursache des Bebens. Auch der letzte exogene Schock wird nicht
+    # mehr gewuerfelt — er ist die Entladung einer Spannung, die sich ueber Jahrhunderte
+    # im Gestein aufbaut. Der Zufall sitzt in der Geologie (Worldgen), nicht im Jahr.
+    ERDSPANNUNG = "Erdspannung"
     FORSCHUNG = "Forschung"
     MACHTWECHSEL = "Machtwechsel"
     GLAUBENSWANDEL = "Glaubenswandel"
@@ -138,6 +172,7 @@ class FactorLabel(StrEnum):
     FRAGMENTIERUNG = "Fragmentierung"
     BEKEHRUNG = "Bekehrung"
     GLAUBENSSPALTUNG = "Glaubensspaltung"
+    INNERE_KRISE = "Innere Krise"
     KATASTROPHE = "Katastrophe"
     TECHNOLOGISCHER_DURCHBRUCH = "Technologischer Durchbruch"
     WENDEPUNKT = "Wendepunkt"

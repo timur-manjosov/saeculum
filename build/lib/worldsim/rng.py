@@ -11,6 +11,41 @@ Semantischer und kosmetischer Zufall leben in **getrennten Namensraeumen**.
 Da jeder Strom eine eigene, unabhaengig geseedete :class:`random.Random`-Instanz
 ist, kann der Verbrauch des einen niemals den anderen beeinflussen — kosmetische
 Aenderungen koennen die semantische Reproduzierbarkeit also nicht stoeren.
+
+Der Zufalls-Vertrag (Aenderung 7, Konzept §0)
+---------------------------------------------
+
+**Der Zufall entscheidet nie, OB etwas geschieht.** Er ist vom *Ausloeser von
+Ereignissen* zur *Quelle der Anfangsbedingungen* herabgestuft. Damit hat der
+Kausalgraph keine Stelle mehr, an der "weil der Wuerfel es sagte" steht: jedes
+Ereignis kommt aus dem Zustand der Welt.
+
+Es bleiben genau drei erlaubte Rollen:
+
+1. **Worldgen** — die Anfangsbedingungen der Welt: Geografie und Adjazenz,
+   Nahrungskapazitaeten, Eisenvorkommen, Verwerfungen (``Region.seismicity``),
+   Hauptstaedte, Nationstraits. Der ganze Reichtum der Welt kommt aus dem Seed.
+2. **Die Konstitution einer neu GEBORENEN Entitaet** — ein Herrscher kommt mit
+   Charakter (Trait-Deltas), Lebensspanne und Antrittsalter zur Welt
+   (``forge_ruler``). Das ist kein Ausloeser: der Wuerfel sagt nicht, DASS etwas
+   geschieht, sondern womit ein neues Subsystem ausgestattet ist — genau wie im
+   Worldgen. Wann dieser Herrscher stirbt, steht damit ab seiner ersten Stunde
+   fest (kein jaehrlicher Sterbe-Wurf mehr).
+3. **Ein benannter Jitter, der Gleichstaende bricht** — der ``Zufall``-Faktor der
+   Schlacht. Er ist der EINZIGE Wuerfel im Entscheidungspfad, und er steht als
+   Faktor in der Begruendung des Events, das er beeinflusst: der Graph zeigt
+   selbst an, wo er mitgesprochen hat.
+
+Was dafuer weichen musste (alles gestrichen oder endogenisiert): das
+Katastrophen-System (Pest/Duerre/Erdbeben als Wuerfe), die jaehrliche
+Ernteschwankung (sie erzeugte die Hungersnot — und damit den halben
+Spannungsapparat), der Sterbe-Hazard des Herrschers, der Erbfolge-Wurf
+(``heir_uncertainty``) und die Todes-Chance des geschlagenen Herrschers.
+
+Der Vertrag ist nicht bloss dokumentiert, er ist **gezaehlt**: siehe
+``tests/test_kausalitaet.py`` — in einem Jahr ohne Geburt und ohne Schlacht wird
+kein einziges Mal gewuerfelt, obwohl in ihm Hungersnoete, Aufstaende, Putsche,
+Bankrotte und Beben geschehen.
 """
 
 from __future__ import annotations

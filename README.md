@@ -16,12 +16,12 @@ linked history you can replay in seconds and interrogate with "why?".
 ## Showcase
 
 <!-- TODO: animated GIF of a run — the rise and fall of powers across the ages.
-     Record with: worldsim --seed 42 --years 200 --mode replay  (on a real terminal)
+     Record with: saeculum replay --seed 42 --years 200  (on a real terminal)
      then capture to docs/rise-and-fall.gif and embed below. -->
 
 ![rise and fall of empires — replay (placeholder)](docs/rise-and-fall.gif)
 
-### A real chronicle (excerpt, `--seed 42 --years 200`)
+### A real chronicle (excerpt, `saeculum export --seed 42 --years 200`)
 
 ```text
 History Machine — seed 42, 200 years (config v6)
@@ -48,7 +48,7 @@ Year 61: the plague that had weakened Oreisa allowed Wynadan to rise to dominanc
 
 ------------------------------------------------------------
 seed 42 · 200 years · config v6 · 10 nations · 21 faiths · 85 disasters · 13 turning points · 709 events
-share this world:  worldsim --seed 42 --years 200
+reproduce this world:  saeculum export --seed 42 --years 200
 ```
 
 Nothing above is hand-written prose stored in the save. Each line is *derived* from a structured
@@ -56,7 +56,7 @@ event and its named factors — the same factors that drove the decision. Ask th
 a power fell and it walks the causal graph back to the root:
 
 ```text
-$ worldsim --seed 42 --years 200 --why 30
+$ saeculum export --seed 42 --years 200 --why 30
 Why did Lysetor suffer? — Year 26: Lysetor collapsed, losing much of its realm — a turning point.
   └─ Year 19: Elytor defeated Lysetor and annexed the western forests. [Zufall -0.11, Militaervorteil -0.03]
       └─ Year 19: Lysetor declared a war of faith on Elytor, driven by Aggression (+0.82), Vorsicht (-0.44), Glaubensgraben (+0.40).
@@ -66,18 +66,19 @@ Why did Lysetor suffer? — Year 26: Lysetor collapsed, losing much of its realm
 
 ## Install
 
-Python **3.11+**. The simulation **core** has *zero* runtime dependencies — plain standard
-library. Colour, the map, the live dashboard and replay live in the presentation layer and
-pull in `rich`, `numpy` and `opensimplex` only when you use them.
+Python **3.11+**. The **core** knows nothing about the display: it depends on `numpy` and
+`opensimplex` for the geography (the simulation runs *on* the map), and on nothing else —
+`simulate(seed, years)` never loads a line of rendering code. Colour, the map, the live view
+and the replay live in the presentation layer and pull in `rich`.
 
 ```bash
 # clone, then from the repo root:
 python -m venv .venv && source .venv/bin/activate
 
-# headless core only (no dependencies):
+# headless core only (worldgen + simulation, no rendering):
 pip install .
 
-# with the presentation layer (watch / replay / map / stats):
+# everything you can look at (watch / replay / explore / map / stats):
 pip install ".[presentation]"
 
 # for development (tests + linter):
@@ -86,27 +87,60 @@ pip install ".[dev]"
 
 ## Run
 
-`worldsim` (or `python -m worldsim`) simulates a world and shows it. **Save = Seed**: a run is
-fully determined by `(seed, years, config_version)`, so sharing the seed shares the world.
+Just run it:
 
 ```bash
-worldsim --seed 42 --years 200                 # headless text chronicle (default)
-worldsim --seed 42 --years 200 --mode watch    # live dashboard while history unfolds
-worldsim --seed 42 --years 200 --mode replay   # the whole history, fast-forwarded from the log
+saeculum
 ```
 
-| Option | Meaning |
-| --- | --- |
-| `--seed N` | master seed (the shareable identity of a world) |
-| `--years N` | years to simulate (default `200`) |
-| `--mode {headless,watch,replay}` | text chronicle · live dashboard · time-lapse replay |
-| `--stats` | end-of-run population/power/activity sparklines + summary |
-| `--map` | procedural biome & territory map |
-| `--why ENTITY` / `--why-event ID` | walk the causal graph back from a setback |
-| `--explain N` | factor breakdown of the first `N` wars (the reasoning is the numbers) |
+That's the whole thing. A random world, live, from the first founding to the last collapse —
+the plain call **is** the beautiful mode. The seed is printed at the end, with the line that
+brings the world back.
 
-`watch` and `replay` need a real terminal to animate (they fall back to snapshot frames when
-piped); `headless` prints plain text and works anywhere, dependency-free.
+```bash
+saeculum -s 42 -y 400              # watch that exact world, a little longer
+saeculum watch -s 42 --speed 4     # slowly, in peace
+saeculum replay -s 42              # the finished history, fast-forwarded from the log
+saeculum explore -s 42             # ask the causal graph: why did this nation fall?
+saeculum export -s 42 > world.txt  # save the chronicle as text
+```
+
+Redirect or pipe the plain call and it falls back to the text chronicle, so
+`saeculum > world.txt` stays sensible — nobody wants a dashboard in a file.
+
+| Command | What it does |
+| --- | --- |
+| `watch` | the live view — the default on a terminal |
+| `replay` | the whole history, fast-forwarded from the event log |
+| `explore` | walk the causal graph: `why <nation>`, `who <id>`, `into <id>` |
+| `export` | the chronicle as text — the default when piped |
+
+The same flags mean the same thing everywhere:
+
+| Flag | Meaning |
+| --- | --- |
+| `-s, --seed N` | the shareable identity of a world (default: random, shown at the end) |
+| `-y, --years N` | years to simulate (default `300`) |
+| `--speed N` | years per second in `watch`/`replay` (also `+`/`-` while it runs) |
+| `--view {political,terrain}` | politics as area, or geography in full colour (also `m` while it runs) |
+| `--no-map` | hide the map in `watch`/`replay` — a quieter view |
+| `--stats` | end-of-run population/power/activity sparklines + summary |
+| `--map` | print the world map (`export`) |
+| `--why ENTITY` / `--why-event ID` | walk the causal graph back from a setback (`export`) |
+| `--explain N` | factor breakdown of the first `N` wars (`export`) — the reasoning is the numbers |
+
+In `watch` and `replay`: space pauses, `n` steps a single year, `+`/`-` change the tempo, `m`
+switches the map, `q` leaves. Both need a real terminal to animate and fall back to snapshot
+frames when piped. `saeculum <command> --help` explains each one.
+
+**Save = Seed**: a run is fully determined by `(seed, years, config_version)`, so sharing the
+seed shares the world. Every run ends with the exact line that reproduces it:
+
+```text
+------------------------------------------------------------
+seed 838345 · 400 years · config v15 · 9 nations · 14 faiths · 31 disasters · 8 turning points · 2104 events
+reproduce this world:  saeculum watch --seed 838345 --years 400
+```
 
 ---
 
@@ -156,5 +190,5 @@ ruff check .      # lint
 pytest            # tests (headless core + presentation)
 ```
 
-The headless core is tested without any presentation dependency; a dedicated test asserts that
-importing the core pulls in no `rich`/`numpy`/`opensimplex`, keeping the layering honest.
+A dedicated test asserts that running `simulate` never pulls `rich` into `sys.modules`, keeping
+the layering honest: the core may know the geography, but never the display.

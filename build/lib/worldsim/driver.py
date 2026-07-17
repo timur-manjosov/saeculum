@@ -14,6 +14,7 @@ from dataclasses import replace
 
 from worldsim.config import DEFAULT_CONFIG, Config
 from worldsim.events import EventLog
+from worldsim.geo import RegionGeography, derive_regions
 from worldsim.models import (
     AccessionMode,
     EntityId,
@@ -22,7 +23,7 @@ from worldsim.models import (
     Polity,
     Region,
     Ruler,
-    Stockpile,
+    Stocks,
     World,
 )
 from worldsim.names import make_name
@@ -30,26 +31,29 @@ from worldsim.rng import Rng, Stream
 from worldsim.systems import (
     System,
     consumption,
+    demografie,
     diplomacy,
-    disaster,
     epoch,
-    expansion,
     forge_ruler,
     founding,
     friction,
+    goals,
+    grievance,
     identity,
-    population,
+    initial_strata,
     production,
     research,
     ruler,
-    war,
+    tectonics,
+    tension,
+    trade,
 )
 
 __all__ = ["SYSTEMS", "simulate", "worldgen"]
 
 # Feste Pipeline-Reihenfolge. Gruendung zuerst (meldet neue Nationen), dann der
 # Herrscher-Lauf (Alterung/Sukzession setzt die effektiven Traits dieses Jahres),
-# die Subsistenz-Kette, friedliche Expansion, danach Reibung/Diplomatie/Krieg.
+# die Subsistenz-Kette, danach Reibung/Diplomatie und zuletzt die Zielwahl.
 SYSTEMS: list[tuple[str, System]] = [
     ("founding", founding),
     ("ruler", ruler),
@@ -57,17 +61,38 @@ SYSTEMS: list[tuple[str, System]] = [
     # Effizienz und Schlagkraft.
     ("research", research),
     ("production", production),
+    # Handel gleich nach der Produktion (Aenderung 5): frisch geernteter/gefoerderter
+    # Ueberschuss fliesst entlang der Grenzen zu Defizit-Nachbarn — importiertes
+    # Getreide wendet noch DIESE Hungersnot ab, Eisen/Gold heben noch dieses Jahr die
+    # Schlagkraft, und die entstehende Abhaengigkeit speist die spaetere Zielwahl.
+    ("trade", trade),
     ("consumption", consumption),
-    ("population", population),
-    ("expansion", expansion),
+    # Demografie: Wachstum/Schrumpfung je Schicht + Rekrutierung; danach der Groll-
+    # Aufbau (liest das frische Nahrungsdefizit und die Wohlstandsanteile).
+    ("demografie", demografie),
+    ("grievance", grievance),
     ("friction", friction),
     ("diplomacy", diplomacy),
-    ("war", war),
+    # Der Spannungszustand (Aenderung 6) steht am Ende der Lage-Bildung und VOR der
+    # Zielwahl: er liest alles Frische (Groll, Schatz, Schichten, Abhaengigkeit,
+    # favor, Reibung) und entlaedt sich, wo der Druck die Schwelle reisst — nach
+    # innen selbst (Aufstand/Putsch/Abspaltung/Bankrott/Kollaps), nach aussen ueber
+    # die Zielwahl gleich danach (Krieg). Deshalb muss er ihr vorausgehen.
+    ("tension", tension),
+    # Die utility-basierte Zielwahl steht am Ende der Lage-Bildung: sie liest die
+    # frischen Groessen (Defizit, Groll, Reibung, Furcht, favor, Spannung) und
+    # vollzieht das gewaehlte Ziel sofort — Expansion und Krieg sind ihre Handlungen.
+    ("goals", goals),
     # Am Tick-Ende: Glaubensausbreitung (Konversion) und Schisma. Die Affinitaets-
     # Faktoren in Diplomatie/Krieg lesen die Identitaeten des Vorjahres.
     ("identity", identity),
-    # Danach exogene Schocks (Pest/Erdbeben/Duerre), die Gleichgewichte stoeren ...
-    ("disaster", disaster),
+    # Danach der einzige verbliebene exogene Schock (Aenderung 7): das Erdbeben, das
+    # sich als Gesteinsspannung aufstaut und an einer Schwelle bricht. Es steht VOR dem
+    # Wendepunkt-Waechter, damit dieser es noch als nahe Ursache eines Niedergangs
+    # zitieren kann — seine eigentliche Wirkung entfaltet es aber erst im naechsten
+    # Jahr, durch das Spannungssystem (leerer Schatz ⇒ Fiskaldruck, vernarbtes Land
+    # ⇒ Hunger ⇒ Volksdruck). Es loest nichts aus, es setzt Druck.
+    ("tectonics", tectonics),
     # ... und zuletzt die Wendepunkt-Waechter, die den Ausgang des Jahres deuten.
     ("epoch", epoch),
 ]
@@ -108,34 +133,53 @@ def _nation_traits(gen: Stream) -> NationTraits:
 
 
 def worldgen(master: Rng, cfg: Config) -> World:
-    """Erzeuge die Anfangswelt deterministisch aus dem Seed.
+    """Erzeuge die Anfangswelt deterministisch aus dem Seed — AUF der Geografie.
 
-    Regionen sind Knoten eines abstrakten Adjazenzgraphen (Kanten = Grenzen),
-    keine gerenderte Karte. ``num_nations`` Nationen starten je auf einem Feld
-    mit Anfangsbevoelkerung, Anfangslager und generiertem Namen.
+    Schritt 2: die Regionen sind nicht mehr blinde Knoten eines RNG-Graphen, sondern
+    Stuecke der bei :mod:`worldsim.geo` erzeugten Welt. ``derive_regions`` platziert die
+    Zentren auf Land, leitet Tragfaehigkeit/Eisen/Gold aus Biom, Klima und Wasser ab und
+    baut die Nachbarschaft aus der Voronoi-Zerlegung des Gitters (dieselbe, die die Karte
+    zeichnet). ``num_nations`` Nationen starten auf dem **besten** Land (fruchtbar,
+    bewaessert, kuestennah) — nicht mehr gleichverteilt.
 
-    Semantische Groessen (Kapazitaeten, Adjazenz, Platzierung) stammen aus dem
-    Strom ``"worldgen"``; **Namen** aus einem getrennten *kosmetischen* Strom,
-    damit Flavour die semantische Reproduzierbarkeit nie beeinflusst. Daher
-    bekommt worldgen den Master-RNG (nicht nur einen Strom).
+    Die Geografie ist eine reine Funktion des Seeds (kein Ziehen). Der Strom ``"worldgen"``
+    zieht nur noch, was NICHT geografisch ist: die Verwerfungen (Geologie), die Herrscher
+    und die Nationscharaktere. **Namen** kommen aus dem getrennten *kosmetischen* Strom.
     """
     gen = master.stream("worldgen")
     cos = master.cosmetic_stream("worldgen-names")
 
-    # Regionen: ids 0 .. num_regions-1.
+    # Schritt 2: alle geografischen Region-Eigenschaften aus der Welt-Geografie ableiten.
+    geo = derive_regions(master.seed, cfg)
+
+    # Regionen: ids 0 .. num_regions-1. Lage/Tragfaehigkeit/Ressourcen/Adjazenz geografisch.
     regions: dict[EntityId, Region] = {}
     for rid in range(cfg.num_regions):
-        capacity = gen.uniform(cfg.region_food_capacity_min, cfg.region_food_capacity_max)
-        regions[rid] = Region(id=rid, name=_region_name(cos), food_capacity=capacity)
-
-    _build_adjacency(regions, gen, cfg)
+        regions[rid] = Region(
+            id=rid,
+            name=_region_name(cos),
+            food_capacity=geo.food_capacity[rid],
+            iron_rich=geo.iron_rich[rid],
+            gold_rich=geo.gold_rich[rid],
+            nachbarn=geo.adjacency[rid],
+            # Schritt 3: der Preis jeder Grenzkante, aus dem Terrain der Naht.
+            wegekosten=dict(zip(geo.adjacency[rid], geo.edge_cost[rid], strict=True)),
+            coord=geo.coords[rid],
+        )
+    # Die Verwerfungen bleiben eine gezogene Anfangsbedingung (Erdbeben-Geologie).
+    _assign_seismicity(regions, gen, cfg)
 
     # Nationen: ids num_regions .. num_regions+num_nations-1.
     # Anfangsherrscher: ids danach, num_regions+num_nations .. +2*num_nations-1.
     # Anfangs-Identitaeten: ids danach, num_regions+2*num_nations .. +num_identities-1.
     polities: dict[EntityId, Polity] = {}
     rulers: dict[EntityId, Ruler] = {}
-    capitals = _choose_capitals(regions, gen, cfg)
+    capitals = _choose_capitals(geo, cfg)  # das beste, gestreute Startland (Aufgabe 4)
+    # Die Wiege ist tragfaehig: eine Hauptstadt muss die Anfangsbevoelkerung ernaehren
+    # koennen, sonst startete die Nation im Defizit und ginge sofort bankrott. Floort NUR
+    # die Hauptstadt-Felder — die karge Umgebung bleibt geografisch (und duenn).
+    for cap in capitals:
+        regions[cap].food_capacity = max(regions[cap].food_capacity, cfg.capital_min_capacity)
     ruler_base = cfg.num_regions + cfg.num_nations
     identity_base = ruler_base + cfg.num_nations
 
@@ -153,18 +197,23 @@ def worldgen(master: Rng, cfg: Config) -> World:
         rid: EntityId = ruler_base + n
         capital = capitals[n]
         regions[capital].owner = pid
-        # Anfangsherrscher gruenden eine Dynastie ⇒ Erbfolge-Legitimitaet.
-        rulers[rid] = forge_ruler(rid, gen, cfg, mode=AccessionMode.INHERITED)
+        # Anfangsherrscher gruenden eine Dynastie ⇒ Erbfolge-Legitimitaet. Der Name kommt
+        # aus dem kosmetischen Strom, die Konstitution aus dem semantischen.
+        rulers[rid] = forge_ruler(
+            rid, gen, cfg, mode=AccessionMode.INHERITED, name=make_name(cos)
+        )
         polities[pid] = Polity(
             id=pid,
             name=make_name(cos),
             capital=capital,
             territory=(capital,),
             founded_year=0,
-            population=cfg.initial_population,
+            strata=initial_strata(cfg),
             peak_population=cfg.initial_population,
-            stockpiles=Stockpile(
-                nahrung=cfg.initial_nahrung, wohlstand=cfg.initial_wohlstand
+            stocks=Stocks(
+                getreide=cfg.initial_getreide,
+                eisen=cfg.initial_eisen,
+                gold=cfg.initial_gold,
             ),
             traits=_nation_traits(gen),
             leader=rid,
@@ -173,6 +222,7 @@ def worldgen(master: Rng, cfg: Config) -> World:
 
     return World(
         year=0,
+        seed=master.seed,  # nur fuer den KOSMETISCHEN Strom (Namen), nie fuer Fakten
         regions=regions,
         polities=polities,
         rulers=rulers,
@@ -181,37 +231,51 @@ def worldgen(master: Rng, cfg: Config) -> World:
     )
 
 
-def _build_adjacency(regions: dict[EntityId, Region], gen: Stream, cfg: Config) -> None:
-    """Verbinde Regionen zu einem zusammenhaengenden Graphen (Ring + Extrakanten)."""
-    ids = list(regions)
-    edges: set[tuple[EntityId, EntityId]] = set()
+def _choose_capitals(geo: RegionGeography, cfg: Config) -> list[EntityId]:
+    """Waehle die Startfelder der Nationen: bestes Land zuerst, aber gestreut (Aufgabe 4).
 
-    # Ring ueber eine deterministische Permutation ⇒ garantiert zusammenhaengend.
-    order = ids[:]
-    gen.shuffle(order)
-    for i in range(len(order)):
-        a, b = order[i], order[(i + 1) % len(order)]
-        edges.add((min(a, b), max(a, b)))
+    ``geo.capital_rank`` liefert die Regionen nach Startland-Guete (Fruchtbarkeit +
+    Kueste + Suesswasser). Wir nehmen sie der Reihe nach, ueberspringen aber jede, die an
+    eine schon gewaehlte Hauptstadt grenzt — so gehen die Nationen auf das beste Land,
+    ohne sich alle in dieselbe Ecke zu draengen. Deterministisch (kein RNG): die Rangfolge
+    kommt aus der Geografie. Region-Index == Region-Id (0..num_regions-1).
+    """
+    chosen: list[EntityId] = []
+    chosen_set: set[EntityId] = set()
+    for rid in geo.capital_rank:
+        if any(nb in chosen_set for nb in geo.adjacency[rid]):
+            continue  # zu nah an einer schon gewaehlten Hauptstadt
+        chosen.append(rid)
+        chosen_set.add(rid)
+        if len(chosen) == cfg.num_nations:
+            return chosen
+    # Kleine, dichte Welt: reichte die Streuung nicht, mit den naechstbesten auffuellen.
+    for rid in geo.capital_rank:
+        if rid not in chosen_set:
+            chosen.append(rid)
+            chosen_set.add(rid)
+            if len(chosen) == cfg.num_nations:
+                break
+    return chosen
 
-    # Ein paar Extrakanten fuer ein reicheres Grenzgeflecht.
-    for _ in range(cfg.extra_edges):
-        a, b = gen.choice(ids), gen.choice(ids)
-        if a != b:
-            edges.add((min(a, b), max(a, b)))
 
-    adjacency: dict[EntityId, set[EntityId]] = {rid: set() for rid in ids}
-    for a, b in edges:
-        adjacency[a].add(b)
-        adjacency[b].add(a)
-    for rid, neighbors in adjacency.items():
-        regions[rid].nachbarn = tuple(sorted(neighbors))
-
-
-def _choose_capitals(
+def _assign_seismicity(
     regions: dict[EntityId, Region], gen: Stream, cfg: Config
-) -> list[EntityId]:
-    """Waehle deterministisch verteilte Startfelder fuer die Nationen."""
-    return gen.sample(sorted(regions), k=cfg.num_nations)
+) -> None:
+    """Verteile die Verwerfungen: welche Felder stauen Gesteinsspannung, und wie schnell.
+
+    Aenderung 7: das ist der GANZE Zufall, der im Erdbeben noch steckt — eine
+    Anfangsbedingung wie die Nahrungskapazitaet oder das Eisen. Der Tick wuerfelt danach
+    nicht mehr: er laesst nur faellig werden, was hier verteilt wurde.
+
+    ``strain`` startet ebenfalls gezogen. Das ist die Phase: ohne sie beben alle
+    Verwerfungen dieser Welt zum ersten Mal im Gleichschritt, was kein Erdbeben mehr
+    waere, sondern ein Weltuntergang mit Fahrplan.
+    """
+    for rid in sorted(regions):
+        if gen.random() < cfg.seismic_region_fraction:
+            regions[rid].seismicity = gen.random()
+            regions[rid].strain = gen.random()
 
 
 def simulate(

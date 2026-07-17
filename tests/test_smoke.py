@@ -66,7 +66,7 @@ def test_chronicle_is_readable_text() -> None:
 
 
 def test_cli_main_runs(capsys) -> None:
-    exit_code = main(["--seed", "42", "--years", "100"])
+    exit_code = main(["export", "--seed", "42", "--years", "100"])
     out = capsys.readouterr().out
 
     assert exit_code == 0
@@ -75,30 +75,41 @@ def test_cli_main_runs(capsys) -> None:
 
 def test_cli_seed_sharing_ux(capsys) -> None:
     """Kopf- und Fusszeile nennen den Seed und den exakten Reproduktions-Befehl."""
-    exit_code = main(["--seed", "7", "--years", "60"])
+    exit_code = main(["export", "--seed", "7", "--years", "60"])
     out = capsys.readouterr().out
 
     assert exit_code == 0
     assert "History Machine — seed 7, 60 years" in out
-    # Save = Seed: die Welt laesst sich durch Teilen genau dieses Befehls reproduzieren.
-    assert "share this world:  saeculum --seed 7 --years 60" in out
+    # Save = Seed: die Welt laesst sich durch Teilen genau dieser Zeile reproduzieren.
+    assert "reproduce this world:  saeculum export --seed 7 --years 60" in out
 
 
-def test_cli_replay_mode_runs_headless(capsys) -> None:
-    """--mode replay laeuft ohne TTY als Schnappschuss-Ansicht und endet sauber."""
-    exit_code = main(["--seed", "1", "--years", "40", "--mode", "replay", "--no-map"])
+def test_cli_replay_runs_headless(capsys) -> None:
+    """Der Unterbefehl replay laeuft ohne TTY als Schnappschuss-Ansicht und endet sauber."""
+    exit_code = main(["replay", "-s", "1", "-y", "40", "--no-map"])
     out = capsys.readouterr().out
 
     assert exit_code == 0
     assert "REPLAY" in out
-    assert "share this world:" in out
+    assert "reproduce this world:  saeculum replay --seed 1 --years 40" in out
 
 
-def test_cli_explore_mode_runs_headless(capsys) -> None:
-    """--mode explore laeuft ohne TTY als Beispiel-Sitzung und endet sauber."""
-    exit_code = main(["--seed", "42", "--years", "120", "--mode", "explore"])
+def test_cli_explore_runs_headless(capsys) -> None:
+    """Der Unterbefehl explore laeuft ohne TTY als Beispiel-Sitzung und endet sauber."""
+    exit_code = main(["explore", "-s", "42", "-y", "120"])
     out = capsys.readouterr().out
 
     assert exit_code == 0
     assert "EXPLORE" in out
-    assert "share this world:" in out
+    assert "reproduce this world:  saeculum explore --seed 42 --years 120" in out
+
+
+def test_cli_watch_runs_headless(capsys) -> None:
+    """Der Unterbefehl watch treibt die Welt und liefert Fusszeile samt Reproduktion."""
+    exit_code = main(["watch", "-s", "3", "-y", "30", "--no-map"])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "WATCH" in out
+    assert "seed 3" in out  # der Seed steht auch ohne Karte im Kopf
+    assert "reproduce this world:  saeculum watch --seed 3 --years 30" in out

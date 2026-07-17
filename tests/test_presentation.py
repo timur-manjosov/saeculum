@@ -298,6 +298,42 @@ def test_watch_drives_the_world_without_terminal() -> None:
     assert len(log) > 0
 
 
+def test_key_mode_is_a_no_op_without_a_terminal() -> None:
+    """Ohne TTY (Pipe/Test/Windows) gibt es nichts umzuschalten — und nichts zu retten."""
+    from worldsim.presentation.render import _tastenmodus
+
+    with _tastenmodus():
+        pass  # kein Terminal, kein termios-Zugriff, keine Ausnahme
+
+
+def test_live_views_show_their_keys_on_screen() -> None:
+    """Beide bewegten Ansichten zeigen dieselbe Tastenleiste — Bedienung ohne Handbuch."""
+    world, log = simulate(seed=42, years=30)
+
+    for render in (
+        lambda c: replay(world, log, DEFAULT_CONFIG, seed=42, show_map=False, console=c),
+        lambda c: watch(42, 30, DEFAULT_CONFIG, speed=50, show_map=False, console=c),
+    ):
+        console = Console(force_terminal=False, width=100, record=True)
+        render(console)
+        out = console.export_text()
+        assert "space pause" in out
+        assert "q quit" in out
+
+
+def test_live_views_start_in_the_requested_map_view() -> None:
+    """--view waehlt die Anfangsansicht der Karte (die Taste 'm' bleibt der Rest)."""
+    world, log = simulate(seed=42, years=30)
+
+    console = Console(force_terminal=False, width=120, record=True)
+    watch(42, 30, DEFAULT_CONFIG, speed=50, view="terrain", console=console)
+    assert "terrain view" in console.export_text()
+
+    console = Console(force_terminal=False, width=120, record=True)
+    replay(world, log, DEFAULT_CONFIG, seed=42, view="terrain", console=console)
+    assert "terrain view" in console.export_text()
+
+
 def test_watch_drives_identically_to_simulate() -> None:
     """weltlauf spiegelt simulate exakt: gleiche Welt UND gleiche EventIds (Kern unberuehrt)."""
     from collections import deque

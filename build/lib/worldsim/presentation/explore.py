@@ -187,11 +187,10 @@ def _intro(world: World, seed: int) -> Panel:
 class _Explorer:
     """Read-only Sitzungszustand: der aktuelle Fokus und ein Stack fuer ``back``."""
 
-    def __init__(self, world: World, log: EventLog, console: Console, *, seed: int = 0) -> None:
+    def __init__(self, world: World, log: EventLog, console: Console) -> None:
         self.world = world
         self.log = log
         self.console = console
-        self.seed = seed  # nur zur Anzeige: welche Welt man gerade befragt
         self.focus: EventId | None = None
         self.stack: list[EventId] = []
 
@@ -280,7 +279,7 @@ class _Explorer:
         if verb in ("quit", "q", "exit"):
             return True
         if verb in ("help", "?", "h"):
-            self.console.print(_intro(self.world, self.seed))
+            self.console.print(_intro(self.world, 0))
         elif verb in ("why",):
             self.why(arg)
         elif verb in ("who", "life"):
@@ -339,7 +338,7 @@ def explore(
     """
     _ = cfg  # die Erkundung leitet alles aus dem Log ab; keine Config noetig
     console = console or Console()
-    explorer = _Explorer(world, log, console, seed=seed)
+    explorer = _Explorer(world, log, console)
     console.print(_intro(world, seed))
 
     script = commands if commands is not None else (
